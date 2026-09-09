@@ -10,9 +10,11 @@ Welcome to the operational runbook for **Async Task Engine**. This document is d
 | Component | Default Port | Internal Role | Web UI / Dashboard |
 |---|---|---|---|
 | **API Producer** | `8000` | Ingests tasks, assigns UUIDs, updates Redis status | [http://localhost:8000/docs](http://localhost:8000/docs) |
+| **Prometheus Telemetry** | `8000` | Real-time scrape endpoint for Grafana | [http://localhost:8000/metrics](http://localhost:8000/metrics) |
 | **RabbitMQ** | `5672` / `15672` | Direct exchange, primary queue & Dead-Letter Queue | [http://localhost:15672](http://localhost:15672) (`guest` / `guest`) |
-| **Redis** | `6379` | Task statuses (`task:status:*`) and resource locks (`lock:resource:*`) | Access via `redis-cli` |
+| **Redis** | `6379` | Task statuses (`task:status:*`) and resource locks (`lock:resource:*`) | Access via `redis-cli` or CLI |
 | **Worker** | Background | Consumes tasks, acquires lock, streams data chunks | Monitored via container logs |
+| **Operations CLI** | Terminal | Incident triage, task submission, and lock management | `python -m src.cli --help` |
 
 ### 1.2. Key System Invariants
 - **Task Lifecycle:** `PENDING` -> `RUNNING` -> `COMPLETED` (or `FAILED` / `DEAD_LETTERED`)
@@ -23,19 +25,22 @@ Welcome to the operational runbook for **Async Task Engine**. This document is d
 
 ## 2. Emergency 30-Second Triage Checklist
 
-When a ticket arrives stating *"Tasks are not completing"* or *"Data is not updated"*, run these 4 triage commands in order:
+When a ticket arrives stating *"Tasks are not completing"* or *"Data is not updated"*, run these triage commands in order:
 
 ```bash
-# 1. Check container runtime status
+# 1. Check API service health and connectivity via CLI
+python -m src.cli health
+
+# 2. Check for stuck resource locks in Redis
+python -m src.cli locks
+
+# 3. Check container runtime status
 docker-compose ps
 
-# 2. Check if RabbitMQ has active consumers and queue backlog
+# 4. Check if RabbitMQ has active consumers and queue backlog
 docker exec async-engine-rabbitmq rabbitmqctl list_queues name messages messages_unacknowledged consumers
 
-# 3. Check for stuck resource locks in Redis
-docker exec async-engine-redis redis-cli keys "lock:resource:*"
-
-# 4. Check worker logs for unhandled errors
+# 5. Check worker logs for unhandled errors
 docker logs --tail 100 async-engine-worker
 ```
 
@@ -104,10 +109,11 @@ docker exec async-engine-redis redis-cli get "lock:resource:<resource_id>"
    ```bash
    docker logs async-engine-worker | grep "<resource_id>"
    ```
-2. If no active processing is detected and the lock is stale, manually evict the lock:
+2. If no active processing is detected and the lock is stale, manually evict the lock via Operations CLI:
    ```bash
-   docker exec async-engine-redis redis-cli del "lock:resource:<resource_id>"
+   python -m src.cli unlock "<resource_id>"
    ```
+   *(Or alternatively directly via Redis CLI: `docker exec async-engine-redis redis-cli del "lock:resource:<resource_id>"`)*
 3. The worker will automatically acquire the lock and resume task execution on the next queue pass
 
 ---
@@ -191,6 +197,13 @@ docker exec async-engine-redis redis-cli get "task:result:<TASK_UUID>"
 # View unacknowledged messages currently in flight across workers
 docker exec async-engine-rabbitmq rabbitmqctl list_queues name messages_unacknowledged
 ```
+
+### Prometheus Alert Rules (Grafana / Alertmanager)
+| Alert Name | PromQL Expression | Severity | Immediate Action |
+|---|---|---|---|
+| **TasksInDeadLetterQueue** | `rate(dead_letter_tasks_total[5m]) > 0` | Warning | Check DLQ via `rabbitmqctl` and inspect failure reasons |
+| **WorkerPoolStalled** | `active_worker_tasks == 0 and rabbitmq_queue_messages > 10` | Critical | Worker process died; restart via `docker-compose restart worker` |
+| **HighTaskDurationP95** | `histogram_quantile(0.95, sum(rate(task_duration_seconds_bucket[5m])) by (le)) > 30` | Warning | Inspect database query times or decrease `BATCH_CHUNK_SIZE` |
 
 ---
 

@@ -118,6 +118,14 @@ end
 - **Web UI & Polling Integration:** Internal portals poll this endpoint until status transitions from `RUNNING` to `COMPLETED` or `FAILED`, presenting live progress bars
 - **Proactive Alerts:** Critical failures and dead-letter routing emit webhook notifications (Slack, Telegram) directly mentioning the on-call engineer
 
+### 3.7. Observability & Telemetry Subsystem (`src/metrics.py`)
+- **Scrape Endpoint:** Standard `/metrics` handler exposing metrics in Prometheus text exposition format
+- **Throughput Counters:** `tasks_submitted_total` and `tasks_completed_total` labeled by `task_type`, `priority`, and final `status`
+- **Latency Distribution:** `task_duration_seconds` histogram providing p50, p95, and p99 percentiles for batch processing operations
+- **Stream Metrics:** `items_processed_total` records granular throughput of individual chunk elements
+- **Queue Health & Alarms:** `dead_letter_tasks_total` and `active_worker_tasks` gauge for alerting on worker stall or backlog surge
+- **Automated Validation:** GitHub Actions CI validates test coverage and PEP8 compliance on every push across Python 3.11 and 3.12
+
 ---
 
 ## 4. Architectural Trade-Offs & Decisions

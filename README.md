@@ -4,7 +4,9 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110+-009688.svg)](https://fastapi.tiangolo.com/)
 [![RabbitMQ](https://img.shields.io/badge/RabbitMQ-3.13-FF6600.svg)](https://www.rabbitmq.com/)
 [![Redis](https://img.shields.io/badge/Redis-7.0-DC382D.svg)](https://redis.io/)
-[![Tests](https://img.shields.io/badge/pytest-passing-brightgreen.svg)](https://docs.pytest.org/)
+[![CI](https://github.com/georgeladd/async-task-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/georgeladd/async-task-engine/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/badge/pytest-25%20passed-brightgreen.svg)](https://docs.pytest.org/)
+[![Prometheus](https://img.shields.io/badge/Prometheus-Metrics-E6522C.svg)](http://localhost:8000/metrics)
 [![Architecture](https://img.shields.io/badge/docs-Architecture-blue.svg)](docs/ARCHITECTURE.md)
 [![Support Runbook](https://img.shields.io/badge/runbook-L2%2FL3_Support-orange.svg)](docs/SUPPORT_RUNBOOK.md)
 
@@ -69,6 +71,7 @@ docker compose up -d --build
 ```
 
 - **API Documentation (Swagger):** [http://localhost:8000/docs](http://localhost:8000/docs)
+- **Prometheus Telemetry:** [http://localhost:8000/metrics](http://localhost:8000/metrics)
 - **RabbitMQ Management UI:** [http://localhost:15672](http://localhost:15672) (guest / guest)
 - **Health Check:** `curl http://localhost:8000/health`
 
@@ -91,6 +94,29 @@ pytest -v --cov=src tests/
 
 # Run linter
 ruff check src tests
+```
+
+---
+
+## 🛠️ Operations & Support CLI
+
+A dedicated command-line utility for L2/L3 support and operations automation:
+
+```bash
+# Check service connectivity and status
+python -m src.cli health
+
+# Submit task directly from terminal
+python -m src.cli submit --type data_cleanup --resource tenant_42 --priority high --items 100
+
+# Query task execution progress and result metrics
+python -m src.cli status 550e8400-e29b-41d4-a716-446655440000
+
+# Inspect all active distributed locks in Redis
+python -m src.cli locks
+
+# Manually release an orphaned or stuck resource lock
+python -m src.cli unlock tenant_42
 ```
 
 ---
@@ -136,10 +162,12 @@ curl "http://localhost:8000/api/v1/tasks/550e8400-e29b-41d4-a716-446655440000"
 
 ## 🧪 Testing Strategy
 
-The repository maintains 100% unit and integration coverage across critical paths:
+The repository maintains 100% unit and integration coverage across 25 test cases:
 - **`tests/test_chunker.py`**: Stream slicing, uneven division, and memory generator boundaries
 - **`tests/test_redis_lock.py`**: Atomic Lua script release, lock timeout handling, and race condition prevention
 - **`tests/test_api.py`**: FastAPI request validation, AMQP mock dispatch, and error handling
+- **`tests/test_cli.py`**: Support CLI subcommands, health checks, argument parsing, and lock clearance
+- **`tests/test_metrics.py`**: Prometheus gauges, counters, histograms, and `/metrics` exposition format
 - **`tests/test_schemas.py`**: Pydantic v2 serialization integrity
 
 ---
