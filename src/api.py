@@ -7,11 +7,12 @@ from typing import Any
 from uuid import UUID
 
 import redis.asyncio as aioredis
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, Response, status
 from redis.asyncio import Redis
 
 from src.broker import MessageBroker
 from src.config import settings
+from src.metrics import TASKS_SUBMITTED_TOTAL, get_prometheus_metrics
 from src.schemas import TaskCreateRequest, TaskMessage, TaskResponse, TaskStatus
 
 logger = logging.getLogger(__name__)
@@ -64,6 +65,17 @@ async def health_check() -> dict[str, str]:
     return {"status": "ok", "service": settings.app_name}
 
 
+@app.get("/metrics", tags=["Metrics"])
+async def metrics_endpoint() -> Response:
+    """Exposes Prometheus scrape telemetry endpoint.
+
+    Returns:
+        Raw Prometheus text exposition payload.
+    """
+    payload, content_type = get_prometheus_metrics()
+    return Response(content=payload, media_type=content_type)
+
+
 @app.post(
     "/api/v1/tasks",
     response_model=TaskResponse,
@@ -93,6 +105,12 @@ async def submit_task(request: TaskCreateRequest) -> TaskResponse:
 
     try:
         await broker.publish_task(task)
+
+        # Record metrics telemetry
+        TASKS_SUBMITTED_TOTAL.labels(
+            task_type=task.task_type,
+            priority=task.priority.value,
+        ).inc()
 
         # Store initial task status in Redis
         if redis_client:

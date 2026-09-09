@@ -14,6 +14,13 @@ from redis.asyncio import Redis
 from src.broker import MessageBroker
 from src.chunker import chunk_iterator
 from src.config import settings
+from src.metrics import (
+    ACTIVE_WORKER_TASKS,
+    DEAD_LETTER_TASKS_TOTAL,
+    ITEMS_PROCESSED_TOTAL,
+    TASK_DURATION_SECONDS,
+    TASKS_COMPLETED_TOTAL,
+)
 from src.redis_lock import DistributedLock
 from src.schemas import TaskMessage, TaskResult, TaskStatus
 
@@ -67,12 +74,14 @@ class TaskWorker:
             await asyncio.sleep(0.01)
             total_processed += len(chunk)
             total_chunks += 1
+            ITEMS_PROCESSED_TOTAL.labels(task_type=task.task_type).inc(len(chunk))
             logger.debug(
                 f"Task {task.task_id}: processed chunk #{total_chunks} "
                 f"({len(chunk)} items, cumulative={total_processed})"
             )
 
         duration: float = time.monotonic() - start_time
+        TASK_DURATION_SECONDS.labels(task_type=task.task_type).observe(duration)
         result = TaskResult(
             task_id=task.task_id,
             status=TaskStatus.COMPLETED,
@@ -128,6 +137,7 @@ class TaskWorker:
             # Resource successfully locked
             status_key: str = f"task:status:{task.task_id}"
             result_key: str = f"task:result:{task.task_id}"
+            ACTIVE_WORKER_TASKS.inc()
 
             try:
                 await self.redis.set(status_key, TaskStatus.RUNNING.value, ex=86400)
@@ -137,6 +147,7 @@ class TaskWorker:
                 await self.redis.set(status_key, TaskStatus.COMPLETED.value, ex=86400)
                 await self.redis.set(result_key, result.model_dump_json(), ex=86400)
                 await message.ack()
+                TASKS_COMPLETED_TOTAL.labels(task_type=task.task_type, status="completed").inc()
                 logger.info(
                     f"Task {task.task_id} completed successfully in "
                     f"{result.execution_time_seconds}s ({result.processed_count} items)"
@@ -156,7 +167,10 @@ class TaskWorker:
                     )
                     await self.redis.set(status_key, TaskStatus.DEAD_LETTERED.value, ex=86400)
                     await message.reject(requeue=False)
+                    TASKS_COMPLETED_TOTAL.labels(task_type=task.task_type, status="dead_lettered").inc()
+                    DEAD_LETTER_TASKS_TOTAL.labels(task_type=task.task_type).inc()
             finally:
+                ACTIVE_WORKER_TASKS.dec()
                 await lock.release()
 
     async def start(self) -> None:
