@@ -5,6 +5,8 @@
 [![RabbitMQ](https://img.shields.io/badge/RabbitMQ-3.13-FF6600.svg)](https://www.rabbitmq.com/)
 [![Redis](https://img.shields.io/badge/Redis-7.0-DC382D.svg)](https://redis.io/)
 [![Tests](https://img.shields.io/badge/pytest-passing-brightgreen.svg)](https://docs.pytest.org/)
+[![Architecture](https://img.shields.io/badge/docs-Architecture-blue.svg)](docs/ARCHITECTURE.md)
+[![Support Runbook](https://img.shields.io/badge/runbook-L2%2FL3_Support-orange.svg)](docs/SUPPORT_RUNBOOK.md)
 
 Production-grade asynchronous task execution engine designed for internal tools, support operations automation, and high-volume data batch processing
 
@@ -12,8 +14,10 @@ Production-grade asynchronous task execution engine designed for internal tools,
 
 ## 📚 Technical Documentation
 
-- **[System Architecture Specification](docs/ARCHITECTURE.md):** Deep-dive into distributed locks, AMQP dead-letter topology, memory-safe chunking, and architectural trade-offs
-- **[L2/L3 Support Runbook & Incident Playbook](docs/SUPPORT_RUNBOOK.md):** 5-minute operational onboarding, 30-second emergency triage checklist, common incident root causes, and copy-paste CLI fix commands
+| Document | Target Audience | Key Topics Covered |
+|---|---|---|
+| **[System Architecture Specification](docs/ARCHITECTURE.md)** | Backend Engineers, Architects | Invariants, AMQP topology, Redis Lua locks, chunked batch streaming, trade-offs |
+| **[Support Runbook & Incident Playbook](docs/SUPPORT_RUNBOOK.md)** | L2/L3 Support, Operations, SRE | 5-min onboarding, 30-sec triage checklist, incident matrix & copy-paste CLI fix commands |
 
 ---
 
