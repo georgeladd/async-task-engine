@@ -10,6 +10,13 @@ Production-grade asynchronous task execution engine designed for internal tools,
 
 ---
 
+## 📚 Technical Documentation
+
+- **[System Architecture Specification](docs/ARCHITECTURE.md):** Deep-dive into distributed locks, AMQP dead-letter topology, memory-safe chunking, and architectural trade-offs
+- **[L2/L3 Support Runbook & Incident Playbook](docs/SUPPORT_RUNBOOK.md):** 5-minute operational onboarding, 30-second emergency triage checklist, common incident root causes, and copy-paste CLI fix commands
+
+---
+
 ## 🎯 Problems This Architecture Solves
 
 1. **Memory Exhaustion on Large Datasets:** Traditional workers often load massive collections directly into memory. This engine implements chunked stream batching, safely handling millions of records with constant memory footprint
