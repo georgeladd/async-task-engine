@@ -62,6 +62,16 @@ sequenceDiagram
             Worker-->>RMQ: REJECT (requeue=False) -> Routes to DLX/DLQ
         end
     end
+
+    Note over Client,API: Phase 2: Status Polling & Result Retrieval
+    Client->>API: GET /api/v1/tasks/{task_id} (Web UI / Polling / CLI)
+    API->>Redis: GET task:status:{UUID} & task:result:{UUID}
+    Redis-->>API: Return status ("completed") & execution metrics JSON
+    API-->>Client: 200 OK (Full execution summary, processed items, duration)
+
+    opt Notification Dispatch (Failure or High-Priority Tasks)
+        Worker->>Client: Slack / Telegram webhook alert with task result link
+    end
 ```
 
 ---
@@ -101,6 +111,12 @@ end
 ### 3.5. Worker Node (`src/worker.py`)
 - Asynchronous loop using `aio-pika` with explicit manual message acknowledgment (`ack`, `nack`, `reject`)
 - Implements `signal.SIGINT` and `signal.SIGTERM` listeners for clean in-flight task draining before container termination
+
+### 3.6. Result Retrieval & Operator Feedback Loop
+- **REST Status Endpoint:** Operators inspect in-flight or completed runs via `GET /api/v1/tasks/{task_id}`
+- **Fast Key-Value Storage:** Worker writes completion metrics into Redis (`task:result:{task_id}`) containing `TaskResult` (status, processed items, chunk count, duration in seconds, error traceback)
+- **Web UI & Polling Integration:** Internal portals poll this endpoint until status transitions from `RUNNING` to `COMPLETED` or `FAILED`, presenting live progress bars
+- **Proactive Alerts:** Critical failures and dead-letter routing emit webhook notifications (Slack, Telegram) directly mentioning the on-call engineer
 
 ---
 

@@ -29,9 +29,12 @@ Production-grade asynchronous task execution engine designed for internal tools,
 
 ```mermaid
 flowchart TD
-    Client([HTTP Client / Internal Tool UI]) -->|POST /api/v1/tasks| API[FastAPI Producer Node]
-    API -->|Validate Pydantic v2 & Task UUID| Cache[(Redis Task Status)]
-    API -->|Publish AMQP Event with Priority| RMQ_Main{RabbitMQ Direct Exchange}
+    Client([HTTP Client / Internal Tool UI]) -->|1. POST Task Payload| API[FastAPI Producer Node]
+    API -->|202 Accepted + UUID| Client
+    Client <-->|2. Poll Status & Results GET /tasks/id| API
+
+    API -->|Register Initial Status| Cache[(Redis Task Status & Results)]
+    API -->|Publish AMQP Event| RMQ_Main{RabbitMQ Direct Exchange}
     
     RMQ_Main -->|tasks_primary| Worker[Async Worker Consumer]
     
@@ -40,10 +43,13 @@ flowchart TD
         Worker -->|Stream in Chunks| Chunker[Memory-Safe Chunker Engine]
         Chunker -->|Execute Batch Logic| Storage[(Target DB / ClickHouse)]
     end
+
+    Worker -->|Update Status & Metrics JSON| Cache
     
     Worker -.->|Retries Exceeded| DLX{Dead-Letter Exchange}
     DLX -->|tasks_dead_letter| DLQ[(Dead-Letter Queue)]
-    DLQ -.-> AlertBot[Alert Handler]
+    DLQ -.-> AlertBot[Telegram / Slack Bot]
+    AlertBot -.->|Failure Alert with Link| Client
 ```
 
 ---
