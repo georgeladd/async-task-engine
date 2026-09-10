@@ -49,8 +49,11 @@ async def test_submit_task_with_idempotency_header_deduplication(
     async def mock_get(key: str) -> str | None:
         return redis_store.get(key)
 
-    async def mock_set(key: str, value: str, **kwargs) -> None:
+    async def mock_set(key: str, value: str, **kwargs) -> bool:
+        if kwargs.get("nx") and key in redis_store:
+            return False
         redis_store[key] = value
+        return True
 
     mock_redis.get = AsyncMock(side_effect=mock_get)
     mock_redis.set = AsyncMock(side_effect=mock_set)
@@ -97,8 +100,11 @@ async def test_submit_task_with_idempotency_body_field(
     async def mock_get(key: str) -> str | None:
         return redis_store.get(key)
 
-    async def mock_set(key: str, value: str, **kwargs) -> None:
+    async def mock_set(key: str, value: str, **kwargs) -> bool:
+        if kwargs.get("nx") and key in redis_store:
+            return False
         redis_store[key] = value
+        return True
 
     mock_redis.get = AsyncMock(side_effect=mock_get)
     mock_redis.set = AsyncMock(side_effect=mock_set)
@@ -118,3 +124,49 @@ async def test_submit_task_with_idempotency_body_field(
         assert res2.json()["task_id"] == task_id
         assert res2.json()["is_duplicate"] is True
         assert mock_publish.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_idempotency_returns_actual_completed_status(
+    async_client: AsyncClient,
+    mock_redis: AsyncMock,
+) -> None:
+    """Verifies that idempotent replay reflects COMPLETED status if task has already finished."""
+    idempotency_key = f"idem-status-{uuid4()}"
+    task_uuid = str(uuid4())
+    payload = {
+        "task_type": "report_gen",
+        "resource_id": "analytics_shard_1",
+        "payload": {"items": []},
+    }
+    headers = {"Idempotency-Key": idempotency_key}
+
+    # Simulate already executed and completed task in Redis
+    redis_store: dict[str, str] = {
+        f"idempotency:{idempotency_key}": task_uuid,
+        f"task:status:{task_uuid}": "completed",
+    }
+
+    async def mock_get(key: str) -> str | None:
+        return redis_store.get(key)
+
+    async def mock_set(key: str, value: str, **kwargs) -> bool:
+        if kwargs.get("nx") and key in redis_store:
+            return False
+        redis_store[key] = value
+        return True
+
+    mock_redis.get = AsyncMock(side_effect=mock_get)
+    mock_redis.set = AsyncMock(side_effect=mock_set)
+
+    with (
+        patch("src.api.broker.publish_task", new_callable=AsyncMock) as mock_publish,
+        patch("src.api.redis_client", mock_redis),
+    ):
+        res = await async_client.post("/api/v1/tasks", json=payload, headers=headers)
+        assert res.status_code == 202
+        data = res.json()
+        assert data["task_id"] == task_uuid
+        assert data["is_duplicate"] is True
+        assert data["status"] == "completed"
+        mock_publish.assert_not_called()

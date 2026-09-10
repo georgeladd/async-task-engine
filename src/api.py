@@ -128,22 +128,7 @@ async def submit_task(
         HTTPException: If queuing fails.
     """
     idempotency_token: str | None = idempotency_key_header or request.idempotency_key
-
-    # Check for duplicate submission if idempotency token is supplied
-    if idempotency_token and redis_client:
-        idempotency_cache_key = f"idempotency:{idempotency_token}"
-        cached_task_id = await redis_client.get(idempotency_cache_key)
-        if cached_task_id:
-            logger.info(
-                f"Idempotent replay detected for key '{idempotency_token}'. "
-                f"Suppressing duplicate queue dispatch, returning task {cached_task_id}"
-            )
-            return TaskResponse(
-                task_id=UUID(cached_task_id),
-                status=TaskStatus.PENDING,
-                is_duplicate=True,
-                message="Task already enqueued (idempotent replay)",
-            )
+    idempotency_cache_key: str | None = f"idempotency:{idempotency_token}" if idempotency_token else None
 
     task = TaskMessage(
         task_type=request.task_type,
@@ -152,6 +137,30 @@ async def submit_task(
         payload=request.payload,
         callback_url=request.callback_url,
     )
+
+    # Atomic idempotency claim: attempt to acquire token via SET NX before queue dispatch
+    if idempotency_cache_key and redis_client:
+        acquired = await redis_client.set(
+            idempotency_cache_key,
+            str(task.task_id),
+            nx=True,
+            ex=86400,
+        )
+        if not acquired:
+            cached_task_id = await redis_client.get(idempotency_cache_key)
+            if cached_task_id:
+                status_val = await redis_client.get(f"task:status:{cached_task_id}")
+                task_status = TaskStatus(status_val) if status_val else TaskStatus.PENDING
+                logger.info(
+                    f"Idempotent replay detected for key '{idempotency_token}'. "
+                    f"Suppressing duplicate queue dispatch, returning task {cached_task_id}"
+                )
+                return TaskResponse(
+                    task_id=UUID(cached_task_id),
+                    status=task_status,
+                    is_duplicate=True,
+                    message="Task already enqueued (idempotent replay)",
+                )
 
     try:
         await broker.publish_task(task)
@@ -162,20 +171,13 @@ async def submit_task(
             priority=task.priority.value,
         ).inc()
 
-        # Store initial task status, metrics counter, preserved task data, and idempotency mapping in Redis
+        # Store initial task status, metrics counter, preserved task data in Redis
         if redis_client:
             task_status_key: str = f"task:status:{task.task_id}"
             task_data_key: str = f"task:data:{task.task_id}"
             await redis_client.set(task_status_key, TaskStatus.PENDING.value, ex=86400)
             await redis_client.set(task_data_key, task.model_dump_json(), ex=604800)
             await redis_client.incr("metrics:tasks_submitted")
-
-            if idempotency_token:
-                await redis_client.set(
-                    f"idempotency:{idempotency_token}",
-                    str(task.task_id),
-                    ex=86400,
-                )
 
         response = TaskResponse(
             task_id=task.task_id,
@@ -185,6 +187,9 @@ async def submit_task(
         )
     except Exception as err:
         logger.error(f"Failed to submit task {task.task_id}: {err}")
+        # Release idempotency token on failure so client can retry safely
+        if idempotency_cache_key and redis_client:
+            await redis_client.delete(idempotency_cache_key)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=f"Message broker temporarily unavailable: {err}",
