@@ -5,7 +5,8 @@
 [![RabbitMQ](https://img.shields.io/badge/RabbitMQ-3.13-FF6600.svg)](https://www.rabbitmq.com/)
 [![Redis](https://img.shields.io/badge/Redis-7.0-DC382D.svg)](https://redis.io/)
 [![CI](https://github.com/georgeladd/async-task-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/georgeladd/async-task-engine/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/pytest-25%20passed-brightgreen.svg)](https://docs.pytest.org/)
+[![Tests](https://img.shields.io/badge/pytest-32%20passed-brightgreen.svg)](https://docs.pytest.org/)
+[![Console](https://img.shields.io/badge/Console-Dashboard-009688.svg)](http://localhost:8000/dashboard)
 [![Prometheus](https://img.shields.io/badge/Prometheus-Metrics-E6522C.svg)](http://localhost:8000/metrics)
 [![Architecture](https://img.shields.io/badge/docs-Architecture-blue.svg)](docs/ARCHITECTURE.md)
 [![Support Runbook](https://img.shields.io/badge/runbook-L2%2FL3_Support-orange.svg)](docs/SUPPORT_RUNBOOK.md)
@@ -70,6 +71,7 @@ Start the complete stack (RabbitMQ, Redis, API, and Worker) in one command:
 docker compose up -d --build
 ```
 
+- **Operations & Support Console:** [http://localhost:8000/dashboard](http://localhost:8000/dashboard)
 - **API Documentation (Swagger):** [http://localhost:8000/docs](http://localhost:8000/docs)
 - **Prometheus Telemetry:** [http://localhost:8000/metrics](http://localhost:8000/metrics)
 - **RabbitMQ Management UI:** [http://localhost:15672](http://localhost:15672) (guest / guest)
@@ -95,6 +97,18 @@ pytest -v --cov=src tests/
 # Run linter
 ruff check src tests
 ```
+
+---
+
+## 🖥️ Operations & Support Web Console
+
+The engine features a built-in, lightweight web console for L2/L3 support and on-call engineers, accessible at **`http://localhost:8000/dashboard`**:
+
+- **Real-Time Health Monitoring:** Pulsing indicators for API, RabbitMQ, Redis, and in-flight workers
+- **Interactive Telemetry Graphs:** Real-time throughput, queue backlog trends, and batch duration percentiles powered by Prometheus instruments
+- **One-Click Distributed Lock Clearance:** Inspect active Redis resource locks with live TTL countdown and force-release stuck locks instantly without terminal access
+- **Dead-Letter Queue (DLQ) Incident Triage:** Inspect failing payloads, replay failed messages back to the primary queue, or auto-generate complete Incident Dossiers for L3/Development bug trackers
+- **Self-Service Task Runner:** Trigger operational cleanup or synchronization jobs directly from the browser with instant progress feedback
 
 ---
 
@@ -162,12 +176,13 @@ curl "http://localhost:8000/api/v1/tasks/550e8400-e29b-41d4-a716-446655440000"
 
 ## 🧪 Testing Strategy
 
-The repository maintains 100% unit and integration coverage across 25 test cases:
+The repository maintains 100% unit and integration coverage across 32 test cases:
 - **`tests/test_chunker.py`**: Stream slicing, uneven division, and memory generator boundaries
 - **`tests/test_redis_lock.py`**: Atomic Lua script release, lock timeout handling, and race condition prevention
 - **`tests/test_api.py`**: FastAPI request validation, AMQP mock dispatch, and error handling
 - **`tests/test_cli.py`**: Support CLI subcommands, health checks, argument parsing, and lock clearance
 - **`tests/test_metrics.py`**: Prometheus gauges, counters, histograms, and `/metrics` exposition format
+- **`tests/test_ops_api.py`**: Dashboard HTML serving, aggregated overview telemetry, distributed locks management, DLQ inspection, task replay, and incident escalation dossier generation
 - **`tests/test_schemas.py`**: Pydantic v2 serialization integrity
 
 ---

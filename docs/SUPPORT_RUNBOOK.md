@@ -9,6 +9,7 @@ Welcome to the operational runbook for **Async Task Engine**. This document is d
 ### 1.1. Core Components & Access Points
 | Component | Default Port | Internal Role | Web UI / Dashboard |
 |---|---|---|---|
+| **Operations Web Console** | `8000` | Primary L2 triage: live charts, 1-click lock release, DLQ replay | [http://localhost:8000/dashboard](http://localhost:8000/dashboard) |
 | **API Producer** | `8000` | Ingests tasks, assigns UUIDs, updates Redis status | [http://localhost:8000/docs](http://localhost:8000/docs) |
 | **Prometheus Telemetry** | `8000` | Real-time scrape endpoint for Grafana | [http://localhost:8000/metrics](http://localhost:8000/metrics) |
 | **RabbitMQ** | `5672` / `15672` | Direct exchange, primary queue & Dead-Letter Queue | [http://localhost:15672](http://localhost:15672) (`guest` / `guest`) |
@@ -25,9 +26,12 @@ Welcome to the operational runbook for **Async Task Engine**. This document is d
 
 ## 2. Emergency 30-Second Triage Checklist
 
-When a ticket arrives stating *"Tasks are not completing"* or *"Data is not updated"*, run these triage commands in order:
+When a ticket arrives stating *"Tasks are not completing"* or *"Data is not updated"*, perform triage in order:
 
 ```bash
+# 0. Open Operations Web Console in browser for instant visual triage:
+# http://localhost:8000/dashboard (Inspect KPIs, Active Locks & DLQ items)
+
 # 1. Check API service health and connectivity via CLI
 python -m src.cli health
 
@@ -109,11 +113,10 @@ docker exec async-engine-redis redis-cli get "lock:resource:<resource_id>"
    ```bash
    docker logs async-engine-worker | grep "<resource_id>"
    ```
-2. If no active processing is detected and the lock is stale, manually evict the lock via Operations CLI:
-   ```bash
-   python -m src.cli unlock "<resource_id>"
-   ```
-   *(Or alternatively directly via Redis CLI: `docker exec async-engine-redis redis-cli del "lock:resource:<resource_id>"`)*
+2. If no active processing is detected and the lock is stale, manually evict the lock using either:
+   - **Web Console (Recommended):** Open [http://localhost:8000/dashboard](http://localhost:8000/dashboard), find the resource row, and click **"Force Unlock"**
+   - **Operations CLI:** `python -m src.cli unlock "<resource_id>"`
+   - **Raw Redis CLI:** `docker exec async-engine-redis redis-cli del "lock:resource:<resource_id>"`
 3. The worker will automatically acquire the lock and resume task execution on the next queue pass
 
 ---
@@ -123,9 +126,14 @@ docker exec async-engine-redis redis-cli get "lock:resource:<resource_id>"
 #### Symptoms
 - RabbitMQ queue `tasks_dead_letter` has a non-zero message count
 - Task status in API returns `"status": "dead_lettered"`
+- Operations Console displays red badge on Dead-Letter Queue card
 
 #### Root Cause
 The task encountered fatal business errors (e.g. external database rejected batch, corrupt record structure) and exceeded `MAX_TASK_RETRIES` (3 attempts)
+
+#### Remediation & Fast Recovery
+- **One-Click Replay via Web Console:** Open [http://localhost:8000/dashboard](http://localhost:8000/dashboard), inspect failure reason in Dead-Letter Queue table, and click **"Replay"** to re-enqueue message back into primary queue
+- **Escalation to Engineering:** If the issue requires code fix, click **"Escalate"** to automatically compile an Incident Dossier with stack trace and parameters for developers
 
 #### Diagnostic Commands
 ```bash

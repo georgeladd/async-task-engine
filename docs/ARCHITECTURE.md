@@ -126,6 +126,13 @@ end
 - **Queue Health & Alarms:** `dead_letter_tasks_total` and `active_worker_tasks` gauge for alerting on worker stall or backlog surge
 - **Automated Validation:** GitHub Actions CI validates test coverage and PEP8 compliance on every push across Python 3.11 and 3.12
 
+### 3.8. Operations & Support Web Console (`src/static/`, `src/ops_api.py`)
+- **Single-Page Architecture:** Built with Vanilla HTML5/CSS/JS and Chart.js served directly by FastAPI without Node.js build steps or extra containers
+- **Single Source of Truth:** Aggregates telemetry via `GET /api/v1/ops/overview` directly reading from Prometheus instruments and Redis keys in real-time
+- **Active Lock Clearance:** Inspects active locks and issues atomic evictions via `POST /api/v1/ops/unlock`
+- **Two-Way DLQ Integration:** Inspects failure stack traces and provides one-click `POST /api/v1/ops/dlq/replay` to re-enqueue messages back into the primary exchange
+- **Structured Incident Dossier:** `POST /api/v1/ops/escalate` automatically collates execution traces, parameters, and queue states into standardized Markdown reports for L3/Dev bug trackers
+
 ---
 
 ## 4. Architectural Trade-Offs & Decisions
