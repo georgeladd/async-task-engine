@@ -22,6 +22,8 @@ Production-grade asynchronous task execution engine designed for internal tools,
 | Document | Target Audience | Key Topics Covered |
 |---|---|---|
 | **[System Architecture Specification](docs/ARCHITECTURE.md)** | Backend Engineers, Architects | Invariants, AMQP topology, Redis Lua locks, chunked batch streaming, SSRF security, trade-offs |
+| **[Developer Integration Guide](docs/DEVELOPER_GUIDE.md)** | Backend Engineers, Integrators | Handler registry pattern, PostgreSQL bulk-upsert, API rate limiting, live progress streaming |
+| **[Business Overview & Use Cases](docs/BUSINESS_OVERVIEW.md)** | CTO, Product Owners, SRE Leads | Business ROI, FinTech/E-commerce/GDPR scenarios, Celery/Kafka comparison matrix |
 | **[Support Runbook & Incident Playbook](docs/SUPPORT_RUNBOOK.md)** | L2/L3 Support, Operations, SRE | 5-min onboarding, 30-sec triage checklist, incident matrix & copy-paste CLI fix commands |
 | **[Web Console Operator Guide](docs/WEB_CONSOLE_GUIDE.md)** | Support Engineers, Operators | Live charts, lock removal, self-service task runner, DLQ triage, incident dossier workflow |
 
