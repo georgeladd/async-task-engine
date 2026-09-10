@@ -4,6 +4,7 @@ from typing import Any
 
 import httpx
 
+from src.config import settings
 from src.security import is_safe_webhook_url
 
 
@@ -25,9 +26,12 @@ async def handle_http_batch(
     if not target_url:
         raise ValueError("Missing required parameter 'target_url' for http_batch handler")
 
-    is_safe = await is_safe_webhook_url(target_url, allow_local=parameters.get("allow_local", False))
+    is_safe, error_reason = await is_safe_webhook_url(
+        target_url,
+        allow_local=settings.allow_local_webhooks,
+    )
     if not is_safe:
-        raise ValueError(f"SSRF violation: target_url '{target_url}' is blocked")
+        raise ValueError(f"SSRF violation: target_url '{target_url}' is blocked: {error_reason}")
 
     http_method = parameters.get("http_method", "POST").upper()
     headers = parameters.get("headers", {})

@@ -65,7 +65,7 @@ async def test_http_batch_handler_success() -> None:
     )
 
     with (
-        patch("src.handlers.http_batch.is_safe_webhook_url", return_value=True),
+        patch("src.handlers.http_batch.is_safe_webhook_url", return_value=(True, "")),
         patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post,
     ):
         mock_post.return_value = mock_response
@@ -82,10 +82,23 @@ async def test_http_batch_handler_rejects_ssrf() -> None:
     chunk = [{"id": 1}]
     params = {"target_url": "http://169.254.169.254/latest/meta-data"}
 
-    with patch("src.handlers.http_batch.is_safe_webhook_url", return_value=False):
+    with patch("src.handlers.http_batch.is_safe_webhook_url", return_value=(False, "Link-local blocked")):
         with pytest.raises(ValueError) as exc_info:
             await handle_http_batch(chunk, params)
         assert "SSRF violation" in str(exc_info.value)
+        assert "Link-local blocked" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_http_batch_handler_real_ssrf_validation_without_mock() -> None:
+    """Verifies end-to-end SSRF rejection against loopback and cloud metadata without mocking validator."""
+    chunk = [{"id": 1}]
+    params = {"target_url": "http://127.0.0.1:8000/internal-api"}
+
+    with pytest.raises(ValueError) as exc_info:
+        await handle_http_batch(chunk, params)
+    assert "SSRF violation" in str(exc_info.value)
+    assert "prohibited" in str(exc_info.value) or "loopback" in str(exc_info.value)
 
 
 @pytest.mark.asyncio
@@ -101,7 +114,7 @@ async def test_http_batch_handler_raises_on_api_failure() -> None:
     )
 
     with (
-        patch("src.handlers.http_batch.is_safe_webhook_url", return_value=True),
+        patch("src.handlers.http_batch.is_safe_webhook_url", return_value=(True, "")),
         patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post,
     ):
         mock_post.return_value = mock_response
