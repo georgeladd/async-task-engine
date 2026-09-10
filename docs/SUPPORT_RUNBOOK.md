@@ -259,3 +259,27 @@ Escalate to the core development team if:
 - RabbitMQ crashes repeatedly with disk alarm or memory alarm (`rabbitmqctl status`)
 - Multiple dead-lettered tasks originate from valid schema requests, indicating an unhandled upstream API contract change
 - Distributed lock contention is caused by an infinite loop inside task business logic
+- Stalled tasks remain in `RUNNING` status exceeding worker heartbeat timeouts
+
+### How Support Generates an Incident Dossier
+
+Support engineers can compile a complete diagnostic package for engineering using three workflows:
+
+1. **Global Header Button (Web Console):**
+   - Open `http://localhost:8000/dashboard`
+   - Click the red **`🚨 Create Incident`** button in the top navigation bar
+   - Enter the customer's `Task UUID` and operator observations
+   - Click **Generate Incident Dossier**, then **📋 Copy Dossier to Clipboard**
+   - Paste directly into the Jira issue or Slack engineering incident channel
+2. **From Dead-Letter Queue Table:**
+   - In the bottom DLQ table, click **`🚨 Escalate`** next to any failed task
+   - The modal automatically pre-fills the target UUID and queries the root cause from Redis
+3. **Via Operations API:**
+   ```bash
+   curl -X POST http://localhost:8000/api/v1/ops/escalate \
+     -H "Content-Type: application/json" \
+     -d '{
+       "task_id": "550e8400-e29b-41d4-a716-446655440000",
+       "operator_comment": "Customer report: batch export frozen at 85%"
+     }'
+   ```

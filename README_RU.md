@@ -7,7 +7,7 @@
 [![RabbitMQ](https://img.shields.io/badge/RabbitMQ-3.13-FF6600.svg)](https://www.rabbitmq.com/)
 [![Redis](https://img.shields.io/badge/Redis-7.0-DC382D.svg)](https://redis.io/)
 [![CI](https://github.com/georgeladd/async-task-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/georgeladd/async-task-engine/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/pytest-48%20passed-brightgreen.svg)](https://docs.pytest.org/)
+[![Tests](https://img.shields.io/badge/pytest-49%20passed-brightgreen.svg)](https://docs.pytest.org/)
 [![Console](https://img.shields.io/badge/Console-Dashboard-009688.svg)](http://localhost:8000/dashboard)
 [![Prometheus](https://img.shields.io/badge/Prometheus-Metrics-E6522C.svg)](http://localhost:8000/metrics)
 [![Архитектура](https://img.shields.io/badge/docs-Архитектура-blue.svg)](docs/ARCHITECTURE_RU.md)
@@ -184,7 +184,7 @@ curl "http://localhost:8000/api/v1/tasks/550e8400-e29b-41d4-a716-446655440000"
 
 ## 🧪 Стратегия тестирования
 
-Проект покрыт 48 автоматическими тестами, валидирующими критические пути исполнения:
+Проект покрыт 49 автоматическими тестами, валидирующими критические пути исполнения:
 - **`tests/test_chunker.py`**: Потоковое разбиение на чанки, обработка неровных остатков и границы памяти генераторов
 - **`tests/test_redis_lock.py`**: Атомарное снятие блокировки через Lua-скрипт, обработка тайм-аутов и предотвращение гонок
 - **`tests/test_api.py`**: Валидация входных схем FastAPI, отправка в брокер очередей и обработка ошибок
