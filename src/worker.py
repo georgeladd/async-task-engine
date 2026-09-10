@@ -129,7 +129,7 @@ class TaskWorker:
             result: Optional TaskResult output.
         """
         # Validate target destination to prevent SSRF against internal/cloud infrastructure
-        is_safe, error_reason = is_safe_webhook_url(
+        is_safe, error_reason = await is_safe_webhook_url(
             callback_url,
             allow_local=settings.allow_local_webhooks,
         )

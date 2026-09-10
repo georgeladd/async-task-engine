@@ -1,5 +1,6 @@
 """Operations and support API router for dashboard telemetry and incident management."""
 
+import hmac
 import json
 import logging
 from datetime import datetime, timezone
@@ -43,7 +44,7 @@ async def verify_ops_token(
     Raises:
         HTTPException: If token is missing or invalid.
     """
-    if not token or token != settings.ops_api_key:
+    if not token or not hmac.compare_digest(token, settings.ops_api_key):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or missing operational API key",
@@ -390,13 +391,15 @@ async def replay_dead_letter_task(request: DLQReplayRequest) -> dict[str, Any]:
                 attempts=0,
             )
 
-        # Clear previous retry failure count, reset status to pending, and decrement DLQ counter
+        # 1. Publish to primary queue first to verify broker acceptance
+        await broker.publish_task(task)
+
+        # 2. Update Redis state and decrement DLQ metric only upon successful dispatch
         await redis.delete(f"task:attempts:{request.task_id}")
         await redis.set(status_key, TaskStatus.PENDING.value, ex=86400)
         current_dlq_cnt = int(await redis.get("metrics:tasks_dead_letter") or 0)
         if current_dlq_cnt > 0:
             await redis.decr("metrics:tasks_dead_letter")
-        await broker.publish_task(task)
 
         logger.info(f"Task {request.task_id} replayed from DLQ into primary queue")
         result = {

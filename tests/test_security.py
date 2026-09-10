@@ -11,43 +11,48 @@ from src.security import generate_hmac_signature, is_safe_webhook_url
 from src.worker import TaskWorker
 
 
-def test_is_safe_webhook_url_rejects_internal_and_private_hosts() -> None:
+@pytest.mark.asyncio
+async def test_is_safe_webhook_url_rejects_internal_and_private_hosts() -> None:
     """Verifies that is_safe_webhook_url blocks SSRF attempts on internal networks."""
     # 1. Loopback addresses
-    assert is_safe_webhook_url("http://127.0.0.1/hook")[0] is False
-    assert is_safe_webhook_url("http://localhost:8000/hook")[0] is False
-    assert is_safe_webhook_url("http://[::1]/hook")[0] is False
+    assert (await is_safe_webhook_url("http://127.0.0.1/hook"))[0] is False
+    assert (await is_safe_webhook_url("http://localhost:8000/hook"))[0] is False
+    assert (await is_safe_webhook_url("http://[::1]/hook"))[0] is False
+    assert (await is_safe_webhook_url("http://[::ffff:127.0.0.1]/hook"))[0] is False
 
     # 2. Cloud metadata link-local address
-    assert is_safe_webhook_url("http://169.254.169.254/latest/meta-data/")[0] is False
-    assert is_safe_webhook_url("http://metadata.google.internal/computeMetadata/v1/")[0] is False
+    assert (await is_safe_webhook_url("http://169.254.169.254/latest/meta-data/"))[0] is False
+    assert (await is_safe_webhook_url("http://metadata.google.internal/computeMetadata/v1/"))[0] is False
 
     # 3. Invalid schemes
-    assert is_safe_webhook_url("ftp://example.com/file")[0] is False
-    assert is_safe_webhook_url("gopher://example.com")[0] is False
+    assert (await is_safe_webhook_url("ftp://example.com/file"))[0] is False
+    assert (await is_safe_webhook_url("gopher://example.com"))[0] is False
 
-    # 4. Private IPv4 subnets
-    assert is_safe_webhook_url("https://10.1.2.3/notify")[0] is False
-    assert is_safe_webhook_url("https://192.168.1.100/notify")[0] is False
-    assert is_safe_webhook_url("https://172.16.5.10/notify")[0] is False
+    # 4. Private IPv4 subnets and IPv4-mapped IPv6
+    assert (await is_safe_webhook_url("https://10.1.2.3/notify"))[0] is False
+    assert (await is_safe_webhook_url("https://192.168.1.100/notify"))[0] is False
+    assert (await is_safe_webhook_url("https://172.16.5.10/notify"))[0] is False
+    assert (await is_safe_webhook_url("https://[::ffff:192.168.1.50]/notify"))[0] is False
 
 
-def test_is_safe_webhook_url_allows_local_when_flag_set() -> None:
+@pytest.mark.asyncio
+async def test_is_safe_webhook_url_allows_local_when_flag_set() -> None:
     """Verifies that local URLs are permitted when allow_local is True."""
-    is_safe, _ = is_safe_webhook_url("http://127.0.0.1:8000/hook", allow_local=True)
+    is_safe, _ = await is_safe_webhook_url("http://127.0.0.1:8000/hook", allow_local=True)
     assert is_safe is True
 
-    is_safe, _ = is_safe_webhook_url("http://localhost:3000/callback", allow_local=True)
+    is_safe, _ = await is_safe_webhook_url("http://localhost:3000/callback", allow_local=True)
     assert is_safe is True
 
 
-def test_is_safe_webhook_url_allows_public_domain() -> None:
+@pytest.mark.asyncio
+async def test_is_safe_webhook_url_allows_public_domain() -> None:
     """Verifies that public domains resolving to external IPs are permitted."""
     mock_addrinfo = [
         (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))
     ]
     with patch("socket.getaddrinfo", return_value=mock_addrinfo):
-        is_safe, reason = is_safe_webhook_url("https://api.partner.com/webhook")
+        is_safe, reason = await is_safe_webhook_url("https://api.partner.com/webhook")
         assert is_safe is True
         assert reason == ""
 

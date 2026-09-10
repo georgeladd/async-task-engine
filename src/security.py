@@ -1,5 +1,6 @@
 """Security utilities for webhook validation, SSRF protection, and cryptographic signing."""
 
+import asyncio
 import hashlib
 import hmac
 import ipaddress
@@ -10,11 +11,11 @@ from urllib.parse import urlparse
 logger = logging.getLogger(__name__)
 
 
-def is_safe_webhook_url(url: str, allow_local: bool = False) -> tuple[bool, str]:
+async def is_safe_webhook_url(url: str, allow_local: bool = False) -> tuple[bool, str]:
     """Validates target URL against SSRF attacks and internal network reconnaissance.
 
-    Checks scheme, resolves domain names, and ensures IP addresses are not loopback,
-    private, link-local (cloud metadata), or reserved subnets.
+    Checks scheme, asynchronously resolves domain names, and ensures IP addresses
+    are not loopback, private, link-local (cloud metadata), or reserved subnets.
 
     Args:
         url: The destination webhook URL to check.
@@ -43,11 +44,18 @@ def is_safe_webhook_url(url: str, allow_local: bool = False) -> tuple[bool, str]
                 error_reason = f"Access to internal host '{hostname}' is prohibited"
             else:
                 port = parsed.port or (443 if parsed.scheme == "https" else 80)
-                addr_info = socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
+                addr_info = await asyncio.to_thread(
+                    socket.getaddrinfo,
+                    hostname,
+                    port,
+                    type=socket.SOCK_STREAM,
+                )
 
                 for _family, _socktype, _proto, _canonname, sockaddr in addr_info:
                     ip_str = sockaddr[0]
                     ip_obj = ipaddress.ip_address(ip_str)
+                    if isinstance(ip_obj, ipaddress.IPv6Address) and ip_obj.ipv4_mapped:
+                        ip_obj = ip_obj.ipv4_mapped
 
                     if ip_obj.is_loopback:
                         is_safe = False
