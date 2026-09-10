@@ -239,6 +239,9 @@ docker logs -f async-engine-worker | jq -R 'fromjson? | select(.correlation_id =
 
 # Show recent error events with stack traces
 docker logs --tail 200 async-engine-worker | jq -R 'fromjson? | select(.level == "ERROR" or .level == "CRITICAL")'
+
+# Inspect webhook delivery attempts and responses
+docker logs async-engine-worker | jq -R 'fromjson? | select(.message | contains("Webhook"))'
 ```
 
 ### Prometheus Alert Rules (Grafana / Alertmanager)

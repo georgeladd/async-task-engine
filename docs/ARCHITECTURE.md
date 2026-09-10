@@ -155,6 +155,11 @@ end
 - **Smooth Throttling:** If token quota is depleted, worker coroutines compute the exact deficit sleep time (`deficit / rate`), yielding the event loop and ensuring smooth cadence without busy-waiting
 - **Dynamic Configuration:** Paced via `RATE_LIMIT_PER_SECOND` in `.env`, allowing operational throttling adjustments without code redeployments
 
+### 3.12. Asynchronous Webhook Notification System (`src/schemas.py`, `src/worker.py`)
+- **Event-Driven Resolution:** Replaces polling loops (`GET /tasks/{id}`) with automated HTTP POST callbacks pushed immediately upon task conclusion
+- **Multi-Status Events:** Emits `task.completed` with execution metrics (`processed_count`, `duration`) or `task.dead_lettered` on unrecoverable retry exhaustion
+- **Fault-Tolerant Delivery:** Webhook dispatches are bounded by strict 5-second HTTP client timeouts and isolated exception handling; third-party webhook endpoint outages will never crash worker threads or prevent message acknowledgments
+
 ---
 
 ## 4. Architectural Trade-Offs & Decisions
@@ -165,5 +170,6 @@ end
 | **Concurrency Control** | Redis Distributed Lock | Database Row-Level Locking (`SELECT FOR UPDATE`) | Decouples locking from the relational database connection pool, eliminating database lock contention during long operations |
 | **Idempotency Deduplication** | Redis TTL Cache (`idempotency:*`) | Database Unique Constraint Tables | Redis provides sub-millisecond atomic key validation without incurring relational database IOPS overhead on duplicate bursts |
 | **Rate Throttling** | Async Token Bucket Chunker | Fixed `sleep()` delays | Token Bucket accommodates bursts up to bucket capacity while guaranteeing strict average throughput limits |
+| **Callback Delivery** | Out-of-Band Non-blocking Webhooks | Client-side polling only | Webhooks dramatically reduce unnecessary GET traffic on the API cluster during prolonged batch executions |
 | **Batch Streaming** | Memory-Safe Generator Iterators | Loading full arrays, Pandas DataFrames | Generators ensure predictable memory utilization regardless of payload size |
 | **Task Requeuing** | NACK with Requeue & Retry Limits | Infinite immediate retries | Prevents "poison pill" messages from crashing worker loops indefinitely |
