@@ -48,6 +48,7 @@ class Settings(BaseSettings):
 
     batch_chunk_size: int = 100
     max_task_retries: int = 3
+    rate_limit_per_second: float = 100.0
 
     @property
     def rabbitmq_uri(self) -> str:

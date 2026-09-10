@@ -26,6 +26,7 @@ from src.metrics import (
     TASK_DURATION_SECONDS,
     TASKS_COMPLETED_TOTAL,
 )
+from src.rate_limiter import AsyncTokenBucketRateLimiter
 from src.redis_lock import DistributedLock
 from src.schemas import TaskMessage, TaskResult, TaskStatus
 
@@ -36,12 +37,19 @@ logger = logging.getLogger("worker")
 class TaskWorker:
     """Worker node consuming tasks from RabbitMQ, locking resources, and executing chunked batch pipelines."""
 
-    def __init__(self) -> None:
-        """Initializes worker state, connections, and shutdown event flags."""
+    def __init__(self, rate_limit: float | None = None) -> None:
+        """Initializes worker state, connections, rate limiter, and shutdown event flags.
+
+        Args:
+            rate_limit: Optional rate limit in chunks/sec. Defaults to settings.rate_limit_per_second.
+        """
         self.broker = MessageBroker()
         self.redis: Redis | None = None
         self.is_running: bool = False
         self.shutdown_event = asyncio.Event()
+        self.rate_limiter = AsyncTokenBucketRateLimiter(
+            rate=rate_limit or settings.rate_limit_per_second,
+        )
 
     async def initialize(self) -> None:
         """Establishes connections to RabbitMQ and Redis."""
@@ -70,8 +78,9 @@ class TaskWorker:
         total_processed: int = 0
         total_chunks: int = 0
 
-        # Execute chunked streaming batch iteration
+        # Execute chunked streaming batch iteration with token bucket throttling
         for chunk in chunk_iterator(items, chunk_size):
+            await self.rate_limiter.acquire()
             # Simulate real batch database/API processing
             await asyncio.sleep(0.01)
             total_processed += len(chunk)
