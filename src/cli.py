@@ -199,7 +199,7 @@ def build_parser() -> argparse.ArgumentParser:
         Configured ArgumentParser instance.
     """
     parser = argparse.ArgumentParser(
-        prog="ops-cli",
+        prog="async-engine",
         description="Support & Operations CLI for Async Task Engine",
     )
     parser.add_argument(

@@ -42,38 +42,20 @@
 ## 2. Архитектура подключения обработчиков (Паттерн Registry)
 
 Для соблюдения принципа открытости/закрытости (Open-Closed Principle из SOLID) движок использует реестр стратегий. Воркер не содержит жестких конструкций `if/elif/else` или `match/case` для каждого типа задач
+### Встроенный реестр обработчиков
 
-### Создание реестра обработчиков
-
-Создайте файл `src/handlers.py` (или пакет `src/handlers/`):
+Движок поставляется со встроенным модулем `src/handlers/`, включающим готовые обработчики (`http_batch`, `db_bulk`, `demo`). Пользовательские обработчики регистрируются через декоратор `@task_handler`:
 
 ```python
-"""Application business logic handlers registry."""
+from src.handlers import get_handler, task_handler
 
-from collections.abc import Callable, Coroutine
-from typing import Any
-
-# Сигнатура функции-обработчика: принимает порцию записей и параметры задачи
-TaskHandler = Callable[[list[dict[str, Any]], dict[str, Any]], Coroutine[Any, Any, None]]
-
-HANDLERS: dict[str, TaskHandler] = {}
-
-
-def task_handler(task_type: str):
-    """Декоратор для автоматической регистрации обработчика в реестре движка."""
-    def decorator(func: TaskHandler) -> TaskHandler:
-        HANDLERS[task_type] = func
-        return func
-    return decorator
-
-
-def get_handler(task_type: str) -> TaskHandler:
-    """Возвращает зарегистрированный обработчик или выбрасывает исключение."""
-    handler = HANDLERS.get(task_type)
-    if not handler:
-        raise ValueError(f"No handler registered for task_type '{task_type}'")
-    return handler
+@task_handler("custom_operation")
+async def handle_custom_operation(chunk: list[dict], parameters: dict) -> None:
+    # Обработка порции записей
+    pass
 ```
+
+Неизвестные типы задач строго выбрасывают `ValueError` с перечнем доступных обработчиков и направляют задачу в DLQ.
 
 ---
 
@@ -278,22 +260,17 @@ API автоматически формирует routing key: `tasks.heavy.pdf_
 Новый воркер запускается с указанием собственной очереди и маски маршрутизации:
 
 ```python
-# src/worker_heavy.py (или запуск стандартного воркера с флагами)
+# src/worker_heavy.py
 import asyncio
 from src.worker import TaskWorker
-from src.broker import RabbitMQBroker
 
 async def run_heavy_worker():
-    broker = RabbitMQBroker()
-    await broker.connect()
-
-    # Динамическое создание очереди и связывание по маске tasks.heavy.*
-    channel = await broker.get_channel()
-    queue = await channel.declare_queue("tasks_heavy", durable=True)
-    exchange = await channel.declare_exchange("tasks_exchange", type="topic", durable=True)
-    await queue.bind(exchange, routing_key="tasks.heavy.*")
-
-    worker = TaskWorker(broker=broker, queue_name="tasks_heavy")
+    # Автоматически объявляет очередь tasks_heavy и связывает с tasks.topic по маске tasks.heavy.*
+    worker = TaskWorker(
+        queue_name="tasks_heavy",
+        routing_key="tasks.heavy.*",
+        rate_limit=25.0,
+    )
     await worker.start()
 
 if __name__ == "__main__":
@@ -378,7 +355,7 @@ python -m src.worker
 
 ```bash
 # Отправка задачи с 200 записями
-python -m src.cli submit \
+async-engine submit \
   --type inventory_sync \
   --resource warehouse_spb_1 \
   --priority high \
@@ -388,7 +365,7 @@ python -m src.cli submit \
 ### Проверка статуса исполнения
 
 ```bash
-python -m src.cli status <TASK_UUID>
+async-engine status <TASK_UUID>
 ```
 
 ### Написание юнит-теста для нового обработчика

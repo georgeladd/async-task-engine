@@ -43,36 +43,20 @@ The engine decouples transport, queuing, and operational supervision from domain
 
 To uphold the Open-Closed Principle (SOLID), task execution avoids monolithic `if/elif/else` ladders or hardcoded dispatchers
 
-### Creating the Registry
+### Central Registry Pattern
 
-Create `src/handlers.py` (or a `src/handlers/` module package):
+The engine provides a built-in registry package in `src/handlers/` with pre-registered enterprise executors (`http_batch`, `db_bulk`, `demo`). Custom handlers are registered using the `@task_handler` decorator:
 
 ```python
-"""Application business logic handlers registry."""
+from src.handlers import get_handler, task_handler
 
-from collections.abc import Callable, Coroutine
-from typing import Any
-
-TaskHandler = Callable[[list[dict[str, Any]], dict[str, Any]], Coroutine[Any, Any, None]]
-
-HANDLERS: dict[str, TaskHandler] = {}
-
-
-def task_handler(task_type: str):
-    """Decorator to register business logic handlers in the engine registry."""
-    def decorator(func: TaskHandler) -> TaskHandler:
-        HANDLERS[task_type] = func
-        return func
-    return decorator
-
-
-def get_handler(task_type: str) -> TaskHandler:
-    """Retrieves registered task handler or raises an informative ValueError."""
-    handler = HANDLERS.get(task_type)
-    if not handler:
-        raise ValueError(f"No handler registered for task_type '{task_type}'")
-    return handler
+@task_handler("custom_operation")
+async def handle_custom_operation(chunk: list[dict], parameters: dict) -> None:
+    # Process batch chunk
+    pass
 ```
+
+Unregistered task types strictly raise an informative `ValueError` and route failing tasks to the DLQ.
 
 ---
 
@@ -272,19 +256,14 @@ The dedicated worker declares and binds its queue upon startup:
 # src/worker_heavy.py
 import asyncio
 from src.worker import TaskWorker
-from src.broker import RabbitMQBroker
 
 async def run_heavy_worker():
-    broker = RabbitMQBroker()
-    await broker.connect()
-
-    # Dynamically declare queue and bind to topic exchange with tasks.heavy.*
-    channel = await broker.get_channel()
-    queue = await channel.declare_queue("tasks_heavy", durable=True)
-    exchange = await channel.declare_exchange("tasks_exchange", type="topic", durable=True)
-    await queue.bind(exchange, routing_key="tasks.heavy.*")
-
-    worker = TaskWorker(broker=broker, queue_name="tasks_heavy")
+    # Automatically declares 'tasks_heavy' queue and binds to 'tasks.topic' with 'tasks.heavy.*'
+    worker = TaskWorker(
+        queue_name="tasks_heavy",
+        routing_key="tasks.heavy.*",
+        rate_limit=25.0,
+    )
     await worker.start()
 
 if __name__ == "__main__":
@@ -347,7 +326,7 @@ python -m src.worker
 ### Submitting a Test Job via CLI
 
 ```bash
-python -m src.cli submit \
+async-engine submit \
   --type inventory_sync \
   --resource warehouse_spb_1 \
   --priority high \
@@ -357,7 +336,7 @@ python -m src.cli submit \
 ### Checking Status
 
 ```bash
-python -m src.cli status <TASK_UUID>
+async-engine status <TASK_UUID>
 ```
 
 ### Unit Testing Custom Handlers
