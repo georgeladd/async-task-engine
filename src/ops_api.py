@@ -158,12 +158,22 @@ async def get_ops_overview() -> OpsOverview:
         async for _ in redis.scan_iter(match="lock:resource:*", count=100):
             active_locks_count += 1
 
+        # Count active in-flight tasks via self-expiring keys
+        in_flight_tasks_count = 0
+        async for _ in redis.scan_iter(match="task:in_flight:*", count=100):
+            in_flight_tasks_count += 1
+
         # Read distributed cluster-wide metrics from Redis directly (O(1) lookups)
         r_submitted = int(await redis.get("metrics:tasks_submitted") or 0)
         r_completed = int(await redis.get("metrics:tasks_completed") or 0)
         r_dlq = int(await redis.get("metrics:tasks_dead_letter") or 0)
         r_items = int(await redis.get("metrics:items_processed") or 0)
         r_active = max(0, int(await redis.get("metrics:active_workers") or 0))
+
+        # Prioritize self-healing in-flight key count if active tasks are tracked
+        if in_flight_tasks_count > 0:
+            r_active = in_flight_tasks_count
+
         r_dur_sum = float(await redis.get("metrics:duration_sum") or 0.0)
         r_dur_cnt = int(await redis.get("metrics:duration_count") or 0)
     except (RedisError, OSError) as err:

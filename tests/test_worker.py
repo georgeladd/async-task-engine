@@ -108,3 +108,65 @@ async def test_worker_exceeds_max_retries_routes_to_dlq() -> None:
         assert webhook_kwargs["status"] == TaskStatus.DEAD_LETTERED
         assert webhook_kwargs["task"].attempts == 3
         assert webhook_kwargs["result"] is None
+
+
+@pytest.mark.asyncio
+async def test_worker_lock_contention_backs_off_and_requeues() -> None:
+    """Verifies that worker backs off with sleep before requeuing when resource is locked."""
+    worker = TaskWorker()
+    worker.redis = AsyncMock()
+
+    task = TaskMessage(
+        task_id=uuid4(),
+        task_type="contention_job",
+        resource_id="locked_resource_42",
+    )
+
+    mock_msg = AsyncMock()
+    mock_msg.body = task.model_dump_json().encode("utf-8")
+    process_cm = MagicMock()
+    process_cm.__aenter__ = AsyncMock(return_value=mock_msg)
+    process_cm.__aexit__ = AsyncMock(return_value=None)
+    mock_msg.process = MagicMock(return_value=process_cm)
+    mock_msg.nack = AsyncMock()
+
+    with (
+        patch("src.worker.DistributedLock.acquire", new_callable=AsyncMock, return_value=False),
+        patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
+    ):
+        await worker.handle_incoming_message(mock_msg)
+
+        mock_sleep.assert_called_once_with(0.5)
+        mock_msg.nack.assert_called_once_with(requeue=True)
+
+
+@pytest.mark.asyncio
+async def test_worker_manages_in_flight_task_key() -> None:
+    """Verifies that worker sets self-expiring in_flight key and deletes it in finally block."""
+    worker = TaskWorker()
+    worker.redis = AsyncMock()
+
+    task = TaskMessage(
+        task_id=uuid4(),
+        task_type="in_flight_test",
+        resource_id="tenant_in_flight",
+    )
+
+    mock_msg = AsyncMock()
+    mock_msg.body = task.model_dump_json().encode("utf-8")
+    process_cm = MagicMock()
+    process_cm.__aenter__ = AsyncMock(return_value=mock_msg)
+    process_cm.__aexit__ = AsyncMock(return_value=None)
+    mock_msg.process = MagicMock(return_value=process_cm)
+    mock_msg.ack = AsyncMock()
+
+    with (
+        patch.object(worker, "process_task_payload", new_callable=AsyncMock),
+        patch("src.worker.DistributedLock.acquire", new_callable=AsyncMock, return_value=True),
+        patch("src.worker.DistributedLock.release", new_callable=AsyncMock, return_value=True),
+    ):
+        await worker.handle_incoming_message(mock_msg)
+
+        in_flight_key = f"task:in_flight:{task.task_id}"
+        worker.redis.set.assert_any_call(in_flight_key, "1", ex=300)
+        worker.redis.delete.assert_any_call(in_flight_key)

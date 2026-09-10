@@ -220,17 +220,20 @@ class TaskWorker:
                 if not acquired:
                     logger.warning(
                         f"Resource '{task.resource_id}' is locked by another task. "
-                        f"Requeuing task {task.task_id} for later retry."
+                        f"Backing off and requeuing task {task.task_id}."
                     )
+                    await asyncio.sleep(0.5)
                     await message.nack(requeue=True)
                     return
 
                 # Resource successfully locked
                 status_key: str = f"task:status:{task.task_id}"
                 result_key: str = f"task:result:{task.task_id}"
+                in_flight_key: str = f"task:in_flight:{task.task_id}"
                 ACTIVE_WORKER_TASKS.inc()
                 if self.redis:
                     await self.redis.incr("metrics:active_workers")
+                    await self.redis.set(in_flight_key, "1", ex=settings.redis_lock_ttl_seconds)
 
                 try:
                     await self.redis.set(status_key, TaskStatus.RUNNING.value, ex=86400)
@@ -309,6 +312,7 @@ class TaskWorker:
                     ACTIVE_WORKER_TASKS.dec()
                     if self.redis:
                         await self.redis.decr("metrics:active_workers")
+                        await self.redis.delete(in_flight_key)
                     await lock.release()
             finally:
                 current_correlation_id.reset(token_corr)

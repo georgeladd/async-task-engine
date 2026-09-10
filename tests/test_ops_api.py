@@ -256,3 +256,23 @@ async def test_ops_escalate_running_task(async_client: AsyncClient, mock_redis: 
         assert data["status"] == "escalated"
         assert "RUNNING" in data["markdown_dossier"]
         assert "stalled in worker event loop" in data["markdown_dossier"]
+
+
+@pytest.mark.asyncio
+async def test_ops_overview_prioritizes_in_flight_tasks_count(
+    async_client: AsyncClient, mock_redis: AsyncMock
+) -> None:
+    """Verifies that active in-flight task keys override counter state."""
+    with patch("src.ops_api._get_redis_client", return_value=mock_redis):
+        async def mock_scan(match: str | None = None, count: int | None = None):
+            if match == "task:in_flight:*":
+                yield "task:in_flight:uuid1"
+                yield "task:in_flight:uuid2"
+
+        mock_redis.scan_iter = mock_scan
+        mock_redis.get = AsyncMock(return_value="0")
+
+        response = await async_client.get("/api/v1/ops/overview")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["active_workers"] == 2
