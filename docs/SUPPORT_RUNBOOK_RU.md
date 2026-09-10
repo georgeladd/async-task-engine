@@ -212,6 +212,15 @@ docker exec async-engine-redis redis-cli get "idempotency:<TOKEN>"
 docker exec async-engine-rabbitmq rabbitmqctl list_queues name messages_unacknowledged
 ```
 
+### Фильтрация структурированных JSON-логов (ELK / jq)
+```bash
+# Фильтрация потоковых логов по конкретному correlation_id задачи
+docker logs -f async-engine-worker | jq -R 'fromjson? | select(.correlation_id == "<TASK_UUID>")'
+
+# Вывод последних 200 ошибок с полным стектрейсом исключений
+docker logs --tail 200 async-engine-worker | jq -R 'fromjson? | select(.level == "ERROR" or .level == "CRITICAL")'
+```
+
 ### Правила алертинга Prometheus (Grafana / Alertmanager)
 | Имя алерта | PromQL выражение | Критичность | Немедленное действие |
 |---|---|---|---|

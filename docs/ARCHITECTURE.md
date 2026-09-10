@@ -143,6 +143,12 @@ end
   - **Cache Miss (New Request):** A new `TaskMessage` is generated and published to RabbitMQ. The mapping `idempotency:{token} -> task_id` is atomically registered in Redis with a 24-hour TTL (`ex=86400`)
 - **Broker Protection:** Downstream RabbitMQ queues and background workers remain completely insulated from redundant network retries
 
+### 3.10. Structured JSON Logging & Distributed Tracing (`src/logging_config.py`)
+- **Single-Line JSON Schema:** All log entries are formatted as parseable JSON objects containing `timestamp` (UTC ISO-8601), `level`, `logger`, `message`, and execution context
+- **Cross-Service Propagation:** The Task UUID is injected into AMQP message properties (`correlation_id`) and message headers (`headers["correlation_id"]`), preserving trace continuity across network boundaries
+- **Async Context Isolation:** Python `contextvars.ContextVar` (`current_correlation_id`, `current_resource_id`) transparently attach tracing metadata to all logs emitted within worker coroutines without manual parameter passing
+- **Ingestion-Ready:** Tailored for effortless aggregation into Grafana Loki, Elasticsearch, or AWS CloudWatch without complex regex parsing rules
+
 ---
 
 ## 4. Architectural Trade-Offs & Decisions
