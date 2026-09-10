@@ -135,7 +135,7 @@ When an issue requires backend developer investigation, support can generate a c
 4. Add operator notes and click **Generate Incident Dossier**
 
 ### 8.3. Format of the Generated Dossier
-```markdown
+````markdown
 ### Incident Report: INC-A4B92C1D
 **Service:** async-task-engine
 **Timestamp:** 2026-09-10 10:15:00 UTC
@@ -158,7 +158,7 @@ psycopg2.OperationalError: server closed the connection unexpectedly
 1. Inspect payload format against active database schemas
 2. Verify downstream database connection pool saturation
 3. After patch deployment, execute replay via POST /api/v1/ops/dlq/replay
-```
+````
 
 ---
 
