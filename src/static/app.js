@@ -1,10 +1,18 @@
 // Operations and Support Console Frontend Logic
 
-const OPS_TOKEN = "ops-dev-secret";
+function getOpsToken() {
+  return localStorage.getItem("ops_token") || "ops-dev-secret";
+}
+
+function setOpsToken(token) {
+  if (token) {
+    localStorage.setItem("ops_token", token.trim());
+  }
+}
 
 function getOpsHeaders(extra = {}) {
   return {
-    "X-Ops-Token": OPS_TOKEN,
+    "X-Ops-Token": getOpsToken(),
     ...extra,
   };
 }
@@ -133,6 +141,15 @@ function setupEventListeners() {
     await handleTaskDispatch();
   });
 
+  // Ops Token Modal listeners
+  const btnOpenToken = document.getElementById("btn-open-token-modal");
+  if (btnOpenToken) {
+    btnOpenToken.addEventListener("click", openTokenModal);
+  }
+  document.getElementById("btn-close-token-modal").addEventListener("click", closeTokenModal);
+  document.getElementById("btn-cancel-token-modal").addEventListener("click", closeTokenModal);
+  document.getElementById("btn-save-token").addEventListener("click", saveToken);
+
   // Escalation Modal listeners
   const btnOpenEscalate = document.getElementById("btn-open-escalate-header");
   if (btnOpenEscalate) {
@@ -163,6 +180,10 @@ function resetRefreshTimer(intervalMs) {
 async function fetchOverview() {
   try {
     const res = await fetch("/api/v1/ops/overview", { headers: getOpsHeaders() });
+    if (res.status === 401) {
+      showToast("Unauthorized: Invalid Ops Token. Click '🔑 Token' to configure", "danger");
+      return;
+    }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
 
@@ -468,4 +489,32 @@ function escapeHtml(str) {
     '"': "&quot;",
     "'": "&#39;",
   })[m]);
+}
+
+// Ops Token Management
+function openTokenModal() {
+  const tokenInput = document.getElementById("ops-token-input");
+  if (tokenInput) {
+    tokenInput.value = getOpsToken();
+  }
+  document.getElementById("token-modal").style.display = "flex";
+}
+
+function closeTokenModal() {
+  document.getElementById("token-modal").style.display = "none";
+}
+
+function saveToken() {
+  const input = document.getElementById("ops-token-input");
+  const tokenVal = input ? input.value.trim() : "";
+  if (!tokenVal) {
+    showToast("Please provide a valid token", "danger");
+    return;
+  }
+  setOpsToken(tokenVal);
+  closeTokenModal();
+  showToast("Operations API key updated", "success");
+  fetchOverview();
+  fetchLocks();
+  fetchDLQ();
 }
