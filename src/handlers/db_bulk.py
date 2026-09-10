@@ -56,6 +56,11 @@ def _execute_sqlite_bulk(
     with sqlite3.connect(db_path) as conn:
         cursor = conn.cursor()
         cursor.execute(f"CREATE TABLE IF NOT EXISTS {clean_table} ({columns_defs_clause})")
+        if pk_column:
+            cursor.execute(
+                f'CREATE UNIQUE INDEX IF NOT EXISTS "idx_{clean_table}_{pk_column}" '
+                f'ON {clean_table} ("{pk_column}")'
+            )
 
         insert_sql = (
             f"INSERT OR REPLACE INTO {clean_table} ({clean_cols_clause}) "
