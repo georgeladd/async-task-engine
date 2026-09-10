@@ -214,6 +214,7 @@ class TaskWorker:
                     # Store completion result
                     await self.redis.set(status_key, TaskStatus.COMPLETED.value, ex=86400)
                     await self.redis.set(result_key, result.model_dump_json(), ex=86400)
+                    await self.redis.delete(f"task:attempts:{task.task_id}")
                     await message.ack()
                     TASKS_COMPLETED_TOTAL.labels(task_type=task.task_type, status="completed").inc()
                     logger.info(
@@ -232,10 +233,26 @@ class TaskWorker:
                         )
                 except Exception as exec_err:  # noqa: BLE001
                     logger.error(f"Execution failed for task {task.task_id}: {exec_err}")
-                    task.attempts += 1
+                    attempts_key: str = f"task:attempts:{task.task_id}"
+                    current_attempts: int = await self.redis.incr(attempts_key)
+                    await self.redis.expire(attempts_key, 86400)
+                    task.attempts = current_attempts
 
-                    if task.attempts < settings.max_task_retries:
-                        logger.info(f"Retrying task {task.task_id} (attempt {task.attempts})")
+                    # Record failure details for debugging and DLQ inspection
+                    error_payload = json.dumps(
+                        {
+                            "task_id": str(task.task_id),
+                            "status": TaskStatus.FAILED.value,
+                            "error_message": str(exec_err),
+                            "attempts": current_attempts,
+                        }
+                    )
+                    await self.redis.set(result_key, error_payload, ex=86400)
+
+                    if current_attempts < settings.max_task_retries:
+                        logger.info(
+                            f"Retrying task {task.task_id} (attempt {current_attempts}/{settings.max_task_retries})"
+                        )
                         await self.redis.set(status_key, TaskStatus.PENDING.value, ex=86400)
                         await message.nack(requeue=True)
                     else:
