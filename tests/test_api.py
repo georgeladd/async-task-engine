@@ -1,20 +1,44 @@
-"""Integration tests for FastAPI endpoints."""
-
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, PropertyMock, patch
 from uuid import uuid4
 
 import pytest
 from httpx import AsyncClient
 
+from src.broker import MessageBroker
+
 
 @pytest.mark.asyncio
-async def test_health_check(async_client: AsyncClient) -> None:
-    """Verifies that health check endpoint returns 200 OK."""
-    response = await async_client.get("/health")
-    assert response.status_code == 200
-    data = response.json()
-    assert data["status"] == "ok"
-    assert data["service"] == "async-task-engine"
+async def test_health_check(async_client: AsyncClient, mock_redis: AsyncMock) -> None:
+    """Verifies that health check endpoint returns 200 OK when dependencies are operational."""
+    with (
+        patch("src.api.redis_client", mock_redis),
+        patch.object(MessageBroker, "is_connected", new_callable=PropertyMock, return_value=True),
+    ):
+        mock_redis.ping = AsyncMock(return_value=True)
+        response = await async_client.get("/health")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "healthy"
+        assert data["service"] == "async-task-engine"
+        assert data["dependencies"]["redis"] == "connected"
+        assert data["dependencies"]["rabbitmq"] == "connected"
+
+
+@pytest.mark.asyncio
+async def test_health_check_degraded_when_dependency_down(
+    async_client: AsyncClient, mock_redis: AsyncMock
+) -> None:
+    """Verifies that health check endpoint returns 503 Service Unavailable when broker is down."""
+    with (
+        patch("src.api.redis_client", mock_redis),
+        patch.object(MessageBroker, "is_connected", new_callable=PropertyMock, return_value=False),
+    ):
+        mock_redis.ping = AsyncMock(return_value=True)
+        response = await async_client.get("/health")
+        assert response.status_code == 503
+        data = response.json()
+        assert data["status"] == "degraded"
+        assert data["dependencies"]["rabbitmq"] == "disconnected"
 
 
 @pytest.mark.asyncio

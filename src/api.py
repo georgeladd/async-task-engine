@@ -9,9 +9,10 @@ from uuid import UUID
 
 import redis.asyncio as aioredis
 from fastapi import FastAPI, Header, HTTPException, Response, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from redis.asyncio import Redis
+from redis.exceptions import RedisError
 
 from src.broker import MessageBroker
 from src.config import settings
@@ -81,14 +82,44 @@ async def dashboard_view() -> FileResponse:
     return FileResponse(str(index_file))
 
 
-@app.get("/health", status_code=status.HTTP_200_OK, tags=["Health"])
-async def health_check() -> dict[str, str]:
-    """Verifies that API service is healthy and responsive.
+@app.get("/health", tags=["Health"])
+async def health_check() -> JSONResponse:
+    """Verifies that API service and its dependencies (Redis, RabbitMQ) are healthy.
 
     Returns:
-        Status summary dictionary.
+        JSONResponse with dependency statuses and HTTP 200 or 503.
     """
-    return {"status": "ok", "service": settings.app_name}
+    dependencies: dict[str, str] = {}
+    is_healthy: bool = True
+
+    # 1. Check Redis connectivity
+    if redis_client:
+        try:
+            await redis_client.ping()
+            dependencies["redis"] = "connected"
+        except (RedisError, OSError) as err:
+            dependencies["redis"] = f"unreachable: {err}"
+            is_healthy = False
+    else:
+        dependencies["redis"] = "uninitialized"
+        is_healthy = False
+
+    # 2. Check RabbitMQ connectivity
+    if broker.is_connected:
+        dependencies["rabbitmq"] = "connected"
+    else:
+        dependencies["rabbitmq"] = "disconnected"
+        is_healthy = False
+
+    status_code = status.HTTP_200_OK if is_healthy else status.HTTP_503_SERVICE_UNAVAILABLE
+    return JSONResponse(
+        content={
+            "status": "healthy" if is_healthy else "degraded",
+            "service": settings.app_name,
+            "dependencies": dependencies,
+        },
+        status_code=status_code,
+    )
 
 
 @app.get("/metrics", tags=["Metrics"])

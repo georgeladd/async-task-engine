@@ -38,6 +38,16 @@ class MessageBroker:
         self.main_queue: AbstractQueue | None = None
         self.dlq_queue: AbstractQueue | None = None
 
+    @property
+    def is_connected(self) -> bool:
+        """Indicates whether broker connection and channel are open and operational."""
+        return bool(
+            self.connection
+            and not self.connection.is_closed
+            and self.channel
+            and not self.channel.is_closed
+        )
+
     async def connect(self) -> None:
         """Establishes connection and configures exchanges, queues, and dead-letter routing."""
         self.connection = await aio_pika.connect_robust(self.amqp_uri)
