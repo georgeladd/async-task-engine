@@ -214,6 +214,44 @@ class TaskWorker:
             token_corr = current_correlation_id.set(str(task.task_id))
             token_res = current_resource_id.set(task.resource_id)
 
+            # Pre-validate task handler availability to avoid acquiring locks and poison retry loops
+            try:
+                get_handler(task.task_type)
+            except ValueError as handler_err:
+                logger.critical(
+                    f"Unrecoverable handler error for task {task.task_id}: {handler_err}. "
+                    f"Routing directly to Dead-Letter Queue (DLQ)"
+                )
+                if self.redis:
+                    status_key = f"task:status:{task.task_id}"
+                    result_key = f"task:result:{task.task_id}"
+                    await self.redis.set(status_key, TaskStatus.DEAD_LETTERED.value, ex=86400)
+                    error_payload = json.dumps(
+                        {
+                            "task_id": str(task.task_id),
+                            "status": TaskStatus.DEAD_LETTERED.value,
+                            "error_message": str(handler_err),
+                            "attempts": 1,
+                        }
+                    )
+                    await self.redis.set(result_key, error_payload, ex=86400)
+                    await self.redis.incr("metrics:tasks_dead_letter")
+
+                TASKS_COMPLETED_TOTAL.labels(task_type=task.task_type, status="dead_lettered").inc()
+                DEAD_LETTER_TASKS_TOTAL.labels(task_type=task.task_type).inc()
+
+                if task.callback_url:
+                    await self.dispatch_webhook(
+                        callback_url=str(task.callback_url),
+                        event="task.dead_lettered",
+                        task=task,
+                        status=TaskStatus.DEAD_LETTERED,
+                        result=None,
+                    )
+
+                await message.reject(requeue=False)
+                return
+
             try:
                 if not self.redis:
                     logger.error("Redis client is uninitialized, requeuing task")

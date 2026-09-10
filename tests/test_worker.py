@@ -5,8 +5,21 @@ from uuid import uuid4
 
 import pytest
 
+from src.handlers import register_handler
 from src.schemas import TaskMessage, TaskPriority, TaskStatus
 from src.worker import TaskWorker
+
+
+@pytest.fixture(autouse=True)
+def setup_test_handlers() -> None:
+    """Registers dummy handlers for standard worker tests."""
+    async def dummy_executor(chunk: list, params: dict) -> None:
+        pass
+
+    register_handler("sync_job", dummy_executor)
+    register_handler("critical_batch", dummy_executor)
+    register_handler("contention_job", dummy_executor)
+    register_handler("in_flight_test", dummy_executor)
 
 
 @pytest.mark.asyncio
@@ -170,3 +183,42 @@ async def test_worker_manages_in_flight_task_key() -> None:
         in_flight_key = f"task:in_flight:{task.task_id}"
         worker.redis.set.assert_any_call(in_flight_key, "1", ex=300)
         worker.redis.delete.assert_any_call(in_flight_key)
+
+
+@pytest.mark.asyncio
+async def test_worker_unregistered_task_type_routes_immediately_to_dlq() -> None:
+    """Verifies that unrecoverable unregistered task_type immediately routes to DLQ without retries or locking."""
+    worker = TaskWorker()
+    worker.redis = AsyncMock()
+
+    task = TaskMessage(
+        task_id=uuid4(),
+        task_type="totally_unknown_task_type_xyz",
+        resource_id="tenant_unknown",
+    )
+
+    mock_msg = AsyncMock()
+    mock_msg.body = task.model_dump_json().encode("utf-8")
+    process_cm = MagicMock()
+    process_cm.__aenter__ = AsyncMock(return_value=mock_msg)
+    process_cm.__aexit__ = AsyncMock(return_value=None)
+    mock_msg.process = MagicMock(return_value=process_cm)
+    mock_msg.reject = AsyncMock()
+    mock_msg.nack = AsyncMock()
+
+    with patch("src.worker.DistributedLock.acquire") as mock_acquire:
+        await worker.handle_incoming_message(mock_msg)
+
+        # Verified: Lock was never acquired
+        mock_acquire.assert_not_called()
+
+        # Verified: Message immediately rejected without requeue
+        mock_msg.reject.assert_called_once_with(requeue=False)
+        mock_msg.nack.assert_not_called()
+
+        # Verified: Status in Redis set to DEAD_LETTERED
+        worker.redis.set.assert_any_call(
+            f"task:status:{task.task_id}",
+            TaskStatus.DEAD_LETTERED.value,
+            ex=86400,
+        )
