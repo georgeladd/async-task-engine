@@ -53,17 +53,23 @@ def register_handler(task_type: str, handler: TaskHandler) -> None:
 
 
 def get_handler(task_type: str) -> TaskHandler:
-    """Retrieves a registered handler or falls back to demo simulation.
+    """Retrieves a registered handler or raises ValueError for unknown types.
 
     Args:
         task_type: Requested task type identifier.
 
     Returns:
         Callable task handler.
+
+    Raises:
+        ValueError: If no handler is registered for the specified task_type.
     """
     result = HANDLERS.get(task_type)
     if result is None:
-        result = _handle_demo_simulation
+        raise ValueError(
+            f"No handler registered for task_type '{task_type}'. "
+            f"Available handlers: {sorted(HANDLERS.keys())}"
+        )
     return result
 
 
