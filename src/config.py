@@ -1,5 +1,6 @@
 """Application settings and configuration module."""
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -52,6 +53,42 @@ class Settings(BaseSettings):
     ops_api_key: str = "ops-dev-secret"
     webhook_signing_secret: str = "webhook-dev-secret"
     allow_local_webhooks: bool = False
+    worker_queue_name: str = "tasks_primary"
+    worker_routing_key: str = "tasks.#"
+
+    @model_validator(mode="after")
+    def validate_production_security(self) -> "Settings":
+        """Enforces strict security checks when running in production environment.
+
+        Returns:
+            Validated Settings instance.
+
+        Raises:
+            ValueError: If insecure defaults or configurations are used in production.
+        """
+        if self.environment.lower() in ("prod", "production"):
+            insecure_ops_tokens = {"ops-dev-secret", "secret", "admin", "123456"}
+            insecure_webhook_tokens = {"webhook-dev-secret", "secret", "admin", "123456"}
+
+            if self.ops_api_key in insecure_ops_tokens or len(self.ops_api_key) < 16:
+                raise ValueError(
+                    "Production security violation: OPS_API_KEY must be a strong secret of at least 16 characters"
+                )
+
+            if (
+                self.webhook_signing_secret in insecure_webhook_tokens
+                or len(self.webhook_signing_secret) < 16
+            ):
+                raise ValueError(
+                    "Production security violation: WEBHOOK_SIGNING_SECRET must be at least 16 characters"
+                )
+
+            if self.allow_local_webhooks:
+                raise ValueError(
+                    "Production security violation: ALLOW_LOCAL_WEBHOOKS cannot be enabled in production"
+                )
+
+        return self
 
     @property
     def rabbitmq_uri(self) -> str:
