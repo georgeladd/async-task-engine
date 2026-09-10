@@ -200,6 +200,10 @@ docker exec async-engine-redis redis-cli keys "task:status:*"
 
 # Просмотр сырого JSON результата задачи
 docker exec async-engine-redis redis-cli get "task:result:<TASK_UUID>"
+
+# Просмотр активных токенов идемпотентности и привязанных UUID задач
+docker exec async-engine-redis redis-cli keys "idempotency:*"
+docker exec async-engine-redis redis-cli get "idempotency:<TOKEN>"
 ```
 
 ### Диагностика RabbitMQ

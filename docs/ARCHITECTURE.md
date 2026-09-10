@@ -135,6 +135,14 @@ end
 - **Two-Way DLQ Integration:** Inspects failure stack traces and provides one-click `POST /api/v1/ops/dlq/replay` to re-enqueue messages back into the primary exchange
 - **Structured Incident Dossier:** `POST /api/v1/ops/escalate` automatically collates execution traces, parameters, and queue states into standardized Markdown reports for L3/Dev bug trackers
 
+### 3.9. Idempotency & Deduplication Subsystem (`src/schemas.py`, `src/api.py`)
+- **The Problem:** In distributed environments, network blips, operator double-clicks, and client-side retries frequently trigger duplicate task dispatch. Without deduplication, this causes redundant database writes, resource waste, and billing discrepancies
+- **Dual Intake Support:** The API inspects the standard HTTP header `Idempotency-Key` as well as the JSON body field `idempotency_key`
+- **Atomic Cache Pattern:** When a request with an idempotency key arrives, the producer checks Redis key `idempotency:{token}`:
+  - **Cache Hit (Duplicate Request):** The producer suppresses dispatch to RabbitMQ, logs the deduplication event, and returns a `TaskResponse` containing the original `task_id` with `is_duplicate: true`
+  - **Cache Miss (New Request):** A new `TaskMessage` is generated and published to RabbitMQ. The mapping `idempotency:{token} -> task_id` is atomically registered in Redis with a 24-hour TTL (`ex=86400`)
+- **Broker Protection:** Downstream RabbitMQ queues and background workers remain completely insulated from redundant network retries
+
 ---
 
 ## 4. Architectural Trade-Offs & Decisions
@@ -143,5 +151,6 @@ end
 |---|---|---|---|
 | **Message Broker** | RabbitMQ (`aio-pika`) | Apache Kafka, Celery | RabbitMQ provides granular message acknowledgments, built-in DLQ routing, and message prioritization out-of-the-box without Celery's overhead |
 | **Concurrency Control** | Redis Distributed Lock | Database Row-Level Locking (`SELECT FOR UPDATE`) | Decouples locking from the relational database connection pool, eliminating database lock contention during long operations |
+| **Idempotency Deduplication** | Redis TTL Cache (`idempotency:*`) | Database Unique Constraint Tables | Redis provides sub-millisecond atomic key validation without incurring relational database IOPS overhead on duplicate bursts |
 | **Batch Streaming** | Memory-Safe Generator Iterators | Loading full arrays, Pandas DataFrames | Generators ensure predictable memory utilization regardless of payload size |
 | **Task Requeuing** | NACK with Requeue & Retry Limits | Infinite immediate retries | Prevents "poison pill" messages from crashing worker loops indefinitely |

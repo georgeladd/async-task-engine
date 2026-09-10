@@ -200,6 +200,10 @@ docker exec async-engine-redis redis-cli keys "task:status:*"
 
 # Check raw task result JSON
 docker exec async-engine-redis redis-cli get "task:result:<TASK_UUID>"
+
+# Inspect active idempotency tokens and mapped task UUIDs
+docker exec async-engine-redis redis-cli keys "idempotency:*"
+docker exec async-engine-redis redis-cli get "idempotency:<KEY>"
 ```
 
 ### RabbitMQ Reset & Diagnostic
