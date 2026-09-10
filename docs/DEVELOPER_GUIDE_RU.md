@@ -211,7 +211,7 @@ async def handle_report_export(
 
 ## 4. Подключение реестра к ядру воркера
 
-В файле [src/worker.py](file:///home/x/Projects/resume/async-task-engine/src/worker.py) внутри метода `process_task_payload` связывание занимает всего три строки:
+В файле `src/worker.py` внутри метода `process_task_payload` связывание занимает всего три строки:
 
 ```python
 # Импортируем реестр

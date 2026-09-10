@@ -204,7 +204,7 @@ async def handle_report_export(
 
 ## 4. Connecting Handlers to Worker Core
 
-Inside [src/worker.py](file:///home/x/Projects/resume/async-task-engine/src/worker.py), hook into `process_task_payload`:
+Inside `src/worker.py`, hook into `process_task_payload`:
 
 ```python
 from src.handlers import get_handler
