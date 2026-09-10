@@ -38,6 +38,8 @@ services:
       - REDIS_PORT=6379
     ports:
       - "8000:8000"
+    volumes:
+      - ./src:/app/src
     depends_on:
       rabbitmq:
         condition: service_healthy
@@ -48,6 +50,8 @@ services:
     build: .
     container_name: async-engine-worker
     command: ["python", "-m", "src.worker"]
+    volumes:
+      - ./src:/app/src
     environment:
       - RABBITMQ_HOST=rabbitmq
       - RABBITMQ_PORT=5672
