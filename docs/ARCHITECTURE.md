@@ -11,7 +11,7 @@ This document details the architectural design, core invariants, data flow model
 The engine is purpose-built for operational automation and internal tooling platforms. It adheres to four key engineering principles:
 
 1. **Decoupled Asynchronous Execution:** Web APIs must never block on long-running tasks. Requests are validated, assigned a UUID, and queued with an immediate `202 Accepted` response
-2. **Memory-Bounded Streaming (Chunking):** Workloads containing hundreds of thousands or millions of records must not saturate RAM. Processing is strictly executed via chunked generator streams with constant `O(1)` memory overhead
+2. **Memory-Conscious Generator Chunking:** Batch workloads must not overwhelm memory or trigger heavy GC pauses. Payloads are processed via generator streams (`chunk_iterator`), eliminating duplicate list allocations in RAM while adhering to broker payload limits
 3. **Distributed Concurrency Control:** Operations targeting the same state or external system must execute sequentially. Fine-grained resource locks prevent write collisions and race conditions across multiple worker nodes
 4. **Resilient Failure Routing:** Failed tasks are retried with attempt tracking. Persistent failures are segregated into a Dead-Letter Queue (DLQ) to prevent queue head-of-line blocking
 
@@ -132,9 +132,10 @@ end
 
 ### 3.8. Operations & Support Web Console (`src/static/`, `src/ops_api.py`)
 - **Single-Page Architecture:** Built with Vanilla HTML5/CSS/JS and Chart.js served directly by FastAPI without Node.js build steps or extra containers
-- **Single Source of Truth:** Aggregates telemetry via `GET /api/v1/ops/overview` reading cluster-wide Redis counters and Prometheus instruments in real-time
+- **Role & Access Security:** Operations endpoints (`/api/v1/ops/*`) require an operational API key via the `X-Ops-Token` header (`OPS_API_KEY`), safeguarding administrative unlock, replay, and incident escalation controls
+- **Single Source of Truth & Non-Blocking I/O:** Aggregates telemetry via `GET /api/v1/ops/overview` using O(1) Redis metric counters and non-blocking `SCAN` cursors (`scan_iter`), eliminating high-latency Redis `KEYS` operations
 - **Active Lock Clearance:** Inspects active locks and issues atomic evictions via `POST /api/v1/ops/unlock`
-- **Two-Way DLQ Integration & Full Payload Replay:** Inspects failure stack traces and provides one-click `POST /api/v1/ops/dlq/replay`; automatically retrieves preserved original task payloads from Redis (`task:data:{task_id}`), resets retry attempts, and re-enqueues back into the primary exchange
+- **Two-Way DLQ Integration & Full Payload Replay:** Inspects failure stack traces and provides one-click `POST /api/v1/ops/dlq/replay`; automatically retrieves preserved original task payloads from Redis (`task:data:{task_id}`), resets retry attempts, decrements DLQ metrics, and re-enqueues back into the primary exchange
 - **Structured Incident Dossier:** `POST /api/v1/ops/escalate` automatically collates execution traces, parameters, and queue states into standardized Markdown reports for L3/Dev bug trackers; accessible globally via header button or contextually from DLQ rows
 - **Dedicated Operator Guide:** See [Web Console Operator Guide](WEB_CONSOLE_GUIDE.md) for full interactive workflows, charts interpretation, and triage procedures
 
@@ -158,10 +159,16 @@ end
 - **Smooth Throttling:** If token quota is depleted, worker coroutines compute the exact deficit sleep time (`deficit / rate`), yielding the event loop and ensuring smooth cadence without busy-waiting
 - **Dynamic Configuration:** Paced via `RATE_LIMIT_PER_SECOND` in `.env`, allowing operational throttling adjustments without code redeployments
 
-### 3.12. Asynchronous Webhook Notification System (`src/schemas.py`, `src/worker.py`)
+### 3.12. Hardened Webhook Notification System (`src/security.py`, `src/worker.py`)
 - **Event-Driven Resolution:** Replaces polling loops (`GET /tasks/{id}`) with automated HTTP POST callbacks pushed immediately upon task conclusion
 - **Multi-Status Events:** Emits `task.completed` with execution metrics (`processed_count`, `duration`) or `task.dead_lettered` on unrecoverable retry exhaustion
-- **Fault-Tolerant Delivery:** Webhook dispatches are bounded by strict 5-second HTTP client timeouts and isolated exception handling; third-party webhook endpoint outages will never crash worker threads or prevent message acknowledgments
+- **SSRF Defense:** All destination URLs undergo pre-flight DNS resolution and IP address inspection via `src/security.py`; loopback (`127.0.0.0/8`, `::1`), private subnets (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`), and cloud metadata link-local endpoints (`169.254.169.254`) are strictly rejected
+- **HMAC-SHA256 Payload Signatures:** Every outgoing delivery attaches an `X-Hub-Signature-256` header calculated with `WEBHOOK_SIGNING_SECRET`, allowing receiving webhooks to verify authenticity and tamper-evidence
+- **Fault-Tolerant Delivery:** Webhook dispatches are bounded by strict 5-second HTTP client timeouts and isolated exception handling; destination outages will never crash worker threads or prevent message acknowledgments
+
+### 3.13. Deep Dependency Health Check (`src/api.py`, `src/broker.py`)
+- **Active Dependency Verification:** The `/health` endpoint performs active verification against core backing services: an asynchronous `ping()` to Redis and channel status validation on the RabbitMQ broker
+- **Accurate Readiness Codes:** Returns HTTP 200 `healthy` when both services are operational, or HTTP 503 `degraded` with itemized dependency diagnostics if any backing infrastructure becomes unreachable
 
 ---
 

@@ -278,6 +278,7 @@ Support engineers can compile a complete diagnostic package for engineering usin
    ```bash
    curl -X POST http://localhost:8000/api/v1/ops/escalate \
      -H "Content-Type: application/json" \
+     -H "X-Ops-Token: ops-dev-secret" \
      -d '{
        "task_id": "550e8400-e29b-41d4-a716-446655440000",
        "operator_comment": "Customer report: batch export frozen at 85%"

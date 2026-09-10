@@ -7,7 +7,7 @@
 [![RabbitMQ](https://img.shields.io/badge/RabbitMQ-3.13-FF6600.svg)](https://www.rabbitmq.com/)
 [![Redis](https://img.shields.io/badge/Redis-7.0-DC382D.svg)](https://redis.io/)
 [![CI](https://github.com/georgeladd/async-task-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/georgeladd/async-task-engine/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/pytest-54%20passed-brightgreen.svg)](https://docs.pytest.org/)
+[![Tests](https://img.shields.io/badge/pytest-62%20passed-brightgreen.svg)](https://docs.pytest.org/)
 [![Console](https://img.shields.io/badge/Console-Dashboard-009688.svg)](http://localhost:8000/dashboard)
 [![Prometheus](https://img.shields.io/badge/Prometheus-Metrics-E6522C.svg)](http://localhost:8000/metrics)
 [![Architecture](https://img.shields.io/badge/docs-Architecture-blue.svg)](docs/ARCHITECTURE.md)
@@ -21,7 +21,7 @@ Production-grade asynchronous task execution engine designed for internal tools,
 
 | Document | Target Audience | Key Topics Covered |
 |---|---|---|
-| **[System Architecture Specification](docs/ARCHITECTURE.md)** | Backend Engineers, Architects | Invariants, AMQP topology, Redis Lua locks, chunked batch streaming, trade-offs |
+| **[System Architecture Specification](docs/ARCHITECTURE.md)** | Backend Engineers, Architects | Invariants, AMQP topology, Redis Lua locks, chunked batch streaming, SSRF security, trade-offs |
 | **[Support Runbook & Incident Playbook](docs/SUPPORT_RUNBOOK.md)** | L2/L3 Support, Operations, SRE | 5-min onboarding, 30-sec triage checklist, incident matrix & copy-paste CLI fix commands |
 | **[Web Console Operator Guide](docs/WEB_CONSOLE_GUIDE.md)** | Support Engineers, Operators | Live charts, lock removal, self-service task runner, DLQ triage, incident dossier workflow |
 
@@ -29,12 +29,12 @@ Production-grade asynchronous task execution engine designed for internal tools,
 
 ## 🎯 Problems This Architecture Solves
 
-1. **Out-of-Memory (OOM) Crashes on Large Payloads:** Legacy workers parse entire datasets in memory. This engine implements generator-based chunked streaming, bounding memory consumption to `O(1)` per batch
+1. **Memory Pressure on Large Payloads:** Legacy workers parse and duplicate full datasets in memory. This engine implements generator-based chunking (`chunk_iterator`), eliminating intermediate list copies and reducing Python GC pressure during bulk data processing
 2. **Race Conditions & Write Collisions:** When concurrent users or background jobs update the same account, state corrupts. Redis distributed locks with Lua-based atomic token validation guarantee sequential execution per resource key
 3. **Poison Messages & Queue Jamming:** Failing tasks are tracked via durable Redis attempt counters and automatically routed to a Dead-Letter Queue (DLQ) after retry exhaustion to prevent blocking healthy tasks
 4. **Network Retries & Duplicate Execution (Idempotency):** Built-in atomic `SET NX` support for the `Idempotency-Key` HTTP header and JSON body token prevents duplicate queuing even under high-concurrency race conditions; subsequent requests with identical tokens atomically retrieve the original task without redundant broker dispatch or double-execution
 5. **Downstream API & Database Overload (Throttling):** Integrated Token Bucket rate limiter controls processing cadence, protecting external endpoints and database connection pools from starvation during multi-thousand item batch execution
-6. **Inefficient Status Polling (Webhook Callbacks):** Optional `callback_url` parameter enables event-driven HTTP push notifications for both successful task completions and dead-letter escalations, eliminating redundant client polling loops
+6. **Inefficient Status Polling (Secure Webhook Callbacks):** Optional `callback_url` parameter enables event-driven HTTP push notifications for both successful completions and dead-letter escalations; outgoing deliveries are hardened with SSRF IP filtering and cryptographic HMAC-SHA256 signatures (`X-Hub-Signature-256`)
 
 ---
 
