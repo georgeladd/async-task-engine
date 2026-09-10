@@ -14,15 +14,15 @@ Welcome to the operational runbook for **Async Task Engine**. This document is d
 | **Operations Web Console** | `8000` | Primary L2 triage: live charts, 1-click lock release, DLQ replay | [http://localhost:8000/dashboard](http://localhost:8000/dashboard) ([User Guide](WEB_CONSOLE_GUIDE.md)) |
 | **API Producer** | `8000` | Ingests tasks, assigns UUIDs, updates Redis status | [http://localhost:8000/docs](http://localhost:8000/docs) |
 | **Prometheus Telemetry** | `8000` | Real-time scrape endpoint for Grafana | [http://localhost:8000/metrics](http://localhost:8000/metrics) |
-| **RabbitMQ** | `5672` / `15672` | Direct exchange, primary queue & Dead-Letter Queue | [http://localhost:15672](http://localhost:15672) (`guest` / `guest`) |
+| **RabbitMQ** | `5672` / `15672` | Topic exchange (`tasks.topic`), primary queue (`tasks_primary`), Alternate Exchange (`tasks.ae` -> `tasks_unrouted`), and DLQ (`tasks_dead_letter`) | [http://localhost:15672](http://localhost:15672) (`guest` / `guest`) |
 | **Redis** | `6379` | Task statuses (`task:status:*`) and resource locks (`lock:resource:*`) | Access via `redis-cli` or CLI |
 | **Worker** | Background | Consumes tasks, acquires lock, streams data chunks | Monitored via container logs |
-| **Operations CLI** | Terminal | Incident triage, task submission, and lock management | `python -m src.cli --help` |
+| **Operations CLI** | Terminal | Incident triage, task submission, and lock management | `async-engine --help` (or `python -m src.cli --help`) |
 
 ### 1.2. Key System Invariants
 - **Task Lifecycle:** `PENDING` -> `RUNNING` -> `COMPLETED` (or `FAILED` / `DEAD_LETTERED`)
 - **Resource Locking:** Only **one** worker can process tasks for a given `resource_id` at the same time. Other tasks with the same `resource_id` will be rejected back to the queue until the active lock expires or releases
-- **Dead-Letter Queue:** If a task fails more than `MAX_TASK_RETRIES` (default: 3), retry attempts tracked in Redis trigger automatic rejection into `tasks_dead_letter`. Preserved task context in `task:data:{task_id}` enables seamless one-click replay without loss of items
+- **Dead-Letter Queue:** If a task fails more than `MAX_TASK_RETRIES` (default: 3) or encounters an unrecoverable error (e.g. unknown task type), it is rejected into `tasks_dead_letter`. Preserved task context in `task:data:{task_id}` enables seamless one-click replay without loss of items
 
 ---
 
@@ -35,10 +35,10 @@ When a ticket arrives stating *"Tasks are not completing"* or *"Data is not upda
 # http://localhost:8000/dashboard (Inspect KPIs, Active Locks & DLQ items)
 
 # 1. Check API service health and connectivity via CLI
-python -m src.cli health
+async-engine health
 
 # 2. Check for stuck resource locks in Redis
-python -m src.cli locks
+async-engine locks
 
 # 3. Check container runtime status
 docker-compose ps
@@ -117,7 +117,7 @@ docker exec async-engine-redis redis-cli get "lock:resource:<resource_id>"
    ```
 2. If no active processing is detected and the lock is stale, manually evict the lock using either:
    - **Web Console (Recommended):** Open [http://localhost:8000/dashboard](http://localhost:8000/dashboard), find the resource row, and click **"Force Unlock"**
-   - **Operations CLI:** `python -m src.cli unlock "<resource_id>"`
+   - **Operations CLI:** `async-engine unlock "<resource_id>"` (or `python -m src.cli unlock "<resource_id>"`)
    - **Raw Redis CLI:** `docker exec async-engine-redis redis-cli del "lock:resource:<resource_id>"`
 3. The worker will automatically acquire the lock and resume task execution on the next queue pass
 

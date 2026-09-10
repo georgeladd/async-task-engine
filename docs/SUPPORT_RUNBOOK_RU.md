@@ -14,15 +14,15 @@
 | **Веб-консоль управления** | `8000` | Первичная диагностика L2: графики, снятие локов в 1 клик, Replay из DLQ | [http://localhost:8000/dashboard](http://localhost:8000/dashboard) ([Руководство](WEB_CONSOLE_GUIDE_RU.md)) |
 | **FastAPI Producer** | `8000` | Прием задач, генерация UUID, запись статуса в Redis | [http://localhost:8000/docs](http://localhost:8000/docs) |
 | **Метрики Prometheus** | `8000` | Скрейпинг метрик в реальном времени для Grafana | [http://localhost:8000/metrics](http://localhost:8000/metrics) |
-| **RabbitMQ** | `5672` / `15672` | Direct exchange, основная очередь и Dead-Letter Queue | [http://localhost:15672](http://localhost:15672) (`guest` / `guest`) |
+| **RabbitMQ** | `5672` / `15672` | Topic exchange (`tasks.topic`), основная очередь (`tasks_primary`), Alternate Exchange (`tasks.ae` -> `tasks_unrouted`) и DLQ (`tasks_dead_letter`) | [http://localhost:15672](http://localhost:15672) (`guest` / `guest`) |
 | **Redis** | `6379` | Статусы задач (`task:status:*`) и блокировки (`lock:resource:*`) | Доступ через `redis-cli`, CLI или веб-консоль |
 | **Worker** | Фоновый | Потребление задач, захват блокировок, потоковая обработка | Логи контейнера `async-engine-worker` |
-| **Консольная утилита (CLI)** | Терминал | Экспресс-диагностика, ручной запуск и управление локами | `python -m src.cli --help` |
+| **Консольная утилита (CLI)** | Терминал | Экспресс-диагностика, ручной запуск и управление локами | `async-engine --help` (или `python -m src.cli --help`) |
 
 ### 1.2. Базовые инварианты системы
 - **Жизненный цикл задачи:** `PENDING` -> `RUNNING` -> `COMPLETED` (или `FAILED` / `DEAD_LETTERED`)
 - **Блокировка ресурсов:** Только **один** воркер может обрабатывать задачи для конкретного `resource_id` одновременно. Остальные задачи с этим же ресурсом будут отложены обратно в очередь до освобождения или экспирации блокировки
-- **Dead-Letter Queue:** Если задача упала с ошибкой больше `MAX_TASK_RETRIES` раз (по умолчанию: 3), персистентный счетчик в Redis направляет её в очередь `tasks_dead_letter`. Сохраненный контекст в `task:data:{task_id}` позволяет восстановить исходные данные при Replay в один клик
+- **Dead-Letter Queue:** Если задача упала с ошибкой больше `MAX_TASK_RETRIES` раз (по умолчанию: 3) или встретила необратимую ошибку (неизвестный тип задачи), она направляется в очередь `tasks_dead_letter`. Сохраненный контекст в `task:data:{task_id}` позволяет восстановить исходные данные при Replay в один клик
 
 ---
 
@@ -35,10 +35,10 @@
 # http://localhost:8000/dashboard (Проверь индикаторы здоровья, очередь, блокировки и DLQ)
 
 # 1. Проверь доступность API сервиса через CLI
-python -m src.cli health
+async-engine health
 
 # 2. Проверь наличие зависших блокировок в Redis
-python -m src.cli locks
+async-engine locks
 
 # 3. Проверь статус контейнеров Docker
 docker-compose ps
@@ -117,7 +117,7 @@ docker exec async-engine-redis redis-cli get "lock:resource:<resource_id>"
    ```
 2. Если активной обработки нет и лок завис, сними блокировку одним из способов:
    - **Через веб-консоль (Рекомендуется):** Открой [http://localhost:8000/dashboard](http://localhost:8000/dashboard), найди ресурс в таблице активных локов и нажми **"Force Unlock"**
-   - **Через консольную утилиту:** `python -m src.cli unlock "<resource_id>"`
+   - **Через консольную утилиту:** `async-engine unlock "<resource_id>"` (или `python -m src.cli unlock "<resource_id>"`)
    - **Напрямую через Redis CLI:** `docker exec async-engine-redis redis-cli del "lock:resource:<resource_id>"`
 3. Воркер автоматически подхватит задачу и начнет выполнение на следующем проходе очереди
 
