@@ -22,7 +22,7 @@ Welcome to the operational runbook for **Async Task Engine**. This document is d
 ### 1.2. Key System Invariants
 - **Task Lifecycle:** `PENDING` -> `RUNNING` -> `COMPLETED` (or `FAILED` / `DEAD_LETTERED`)
 - **Resource Locking:** Only **one** worker can process tasks for a given `resource_id` at the same time. Other tasks with the same `resource_id` will be rejected back to the queue until the active lock expires or releases
-- **Dead-Letter Queue:** If a task fails more than `MAX_TASK_RETRIES` (default: 3), it is moved out of the main queue into `tasks_dead_letter`
+- **Dead-Letter Queue:** If a task fails more than `MAX_TASK_RETRIES` (default: 3), retry attempts tracked in Redis trigger automatic rejection into `tasks_dead_letter`. Preserved task context in `task:data:{task_id}` enables seamless one-click replay without loss of items
 
 ---
 

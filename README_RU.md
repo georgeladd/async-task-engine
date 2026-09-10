@@ -7,7 +7,7 @@
 [![RabbitMQ](https://img.shields.io/badge/RabbitMQ-3.13-FF6600.svg)](https://www.rabbitmq.com/)
 [![Redis](https://img.shields.io/badge/Redis-7.0-DC382D.svg)](https://redis.io/)
 [![CI](https://github.com/georgeladd/async-task-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/georgeladd/async-task-engine/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/pytest-49%20passed-brightgreen.svg)](https://docs.pytest.org/)
+[![Tests](https://img.shields.io/badge/pytest-54%20passed-brightgreen.svg)](https://docs.pytest.org/)
 [![Console](https://img.shields.io/badge/Console-Dashboard-009688.svg)](http://localhost:8000/dashboard)
 [![Prometheus](https://img.shields.io/badge/Prometheus-Metrics-E6522C.svg)](http://localhost:8000/metrics)
 [![Архитектура](https://img.shields.io/badge/docs-Архитектура-blue.svg)](docs/ARCHITECTURE_RU.md)
@@ -31,8 +31,8 @@
 
 1. **Переполнение оперативной памяти (OOM) на больших объемах:** Классические воркеры часто загружают массивы данных целиком в память. В этом движке реализована потоковая генераторная обработка чанками (chunked streaming), гарантирующая константное потребление памяти даже на миллионах строк
 2. **Состояния гонки (Race Conditions) и коллизии записей:** Когда несколько операторов или фоновых скриптов одновременно запускают обновление одной и той же сущности, возникают конфликты. Встроенные распределенные блокировки Redis с атомарным снятием через Lua-скрипт гарантируют строго последовательную обработку в разрезе ресурса
-3. **Зависание очередей из-за "ядовитых" сообщений (Poison Pills):** Задачи с фатальными ошибками ретраятся с экспоненциальной задержкой и автоматически изолируются в Dead-Letter Queue (DLQ), не блокируя здоровый поток очереди
-4. **Сбои сети и дублирование задач (Идемпотентность):** Встроенная поддержка HTTP-заголовка `Idempotency-Key` и токенов в теле запроса. Повторные отправки с тем же ключом возвращают исходную задачу без дублирования в брокере и повторных вызовов
+3. **Зависание очередей из-за "ядовитых" сообщений (Poison Pills):** Попытки выполнения задач персистентно учитываются в Redis Attempt Tracker; после исчерпания лимита повторов задача изолируется в Dead-Letter Queue (DLQ), не блокируя здоровый поток очереди
+4. **Сбои сети и дублирование задач (Идемпотентность):** Атомарная фиксация `Idempotency-Key` через команду `SET NX` до публикации в брокер защищает от дублирования даже при параллельных конкурентных запросах
 5. **Перегрузка внешних API и исчерпание пула БД (Throttling):** Встроенный асинхронный Token Bucket rate limiter дозирует скорость потоковой обработки чанков, защищая сторонние сервисы и базы данных от перегрузки
 6. **Паразитный опрос статуса через Polling (Вебхуки):** Опциональный параметр `callback_url` позволяет отправлять событийно-ориентированные HTTP push-уведомления об успешном завершении или ошибках в DLQ, избавляя клиентов от постоянных GET-опросов
 

@@ -7,7 +7,7 @@
 [![RabbitMQ](https://img.shields.io/badge/RabbitMQ-3.13-FF6600.svg)](https://www.rabbitmq.com/)
 [![Redis](https://img.shields.io/badge/Redis-7.0-DC382D.svg)](https://redis.io/)
 [![CI](https://github.com/georgeladd/async-task-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/georgeladd/async-task-engine/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/pytest-49%20passed-brightgreen.svg)](https://docs.pytest.org/)
+[![Tests](https://img.shields.io/badge/pytest-54%20passed-brightgreen.svg)](https://docs.pytest.org/)
 [![Console](https://img.shields.io/badge/Console-Dashboard-009688.svg)](http://localhost:8000/dashboard)
 [![Prometheus](https://img.shields.io/badge/Prometheus-Metrics-E6522C.svg)](http://localhost:8000/metrics)
 [![Architecture](https://img.shields.io/badge/docs-Architecture-blue.svg)](docs/ARCHITECTURE.md)
@@ -29,10 +29,10 @@ Production-grade asynchronous task execution engine designed for internal tools,
 
 ## 🎯 Problems This Architecture Solves
 
-1. **Memory Exhaustion on Large Datasets:** Traditional workers often load massive collections directly into memory. This engine implements chunked stream batching, safely handling millions of records with constant memory footprint
-2. **Race Conditions & Concurrent Write Collisions:** When multiple operators or automated triggers touch the same resource, collisions happen. Built-in Redis distributed locks with atomic Lua release ensure strict single-task execution per resource key
-3. **Poison Messages & Queue Jamming:** Failing tasks are retried with exponential backoff and automatically routed to a Dead-Letter Queue (DLQ) to prevent blocking healthy tasks
-4. **Network Glitches & Duplicate Submission (Idempotency):** Built-in support for HTTP header `Idempotency-Key` and body tokens. Subsequent requests with identical tokens atomically retrieve the original task without redundant broker dispatch or double-execution
+1. **Out-of-Memory (OOM) Crashes on Large Payloads:** Legacy workers parse entire datasets in memory. This engine implements generator-based chunked streaming, bounding memory consumption to `O(1)` per batch
+2. **Race Conditions & Write Collisions:** When concurrent users or background jobs update the same account, state corrupts. Redis distributed locks with Lua-based atomic token validation guarantee sequential execution per resource key
+3. **Poison Messages & Queue Jamming:** Failing tasks are tracked via durable Redis attempt counters and automatically routed to a Dead-Letter Queue (DLQ) after retry exhaustion to prevent blocking healthy tasks
+4. **Network Retries & Duplicate Execution (Idempotency):** Built-in atomic `SET NX` support for the `Idempotency-Key` HTTP header and JSON body token prevents duplicate queuing even under high-concurrency race conditions; subsequent requests with identical tokens atomically retrieve the original task without redundant broker dispatch or double-execution
 5. **Downstream API & Database Overload (Throttling):** Integrated Token Bucket rate limiter controls processing cadence, protecting external endpoints and database connection pools from starvation during multi-thousand item batch execution
 6. **Inefficient Status Polling (Webhook Callbacks):** Optional `callback_url` parameter enables event-driven HTTP push notifications for both successful task completions and dead-letter escalations, eliminating redundant client polling loops
 

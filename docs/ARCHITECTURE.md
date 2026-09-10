@@ -112,6 +112,7 @@ end
 
 ### 3.5. Worker Node (`src/worker.py`)
 - Asynchronous loop using `aio-pika` with explicit manual message acknowledgment (`ack`, `nack`, `reject`)
+- **Durable Redis Attempt Tracker:** Unlike in-memory counters that get reset upon AMQP `nack(requeue=True)`, retry attempts are atomically tracked in Redis via `INCR task:attempts:{task_id}`. Once attempts reach `max_task_retries` (default: 3), the worker rejects the message without requeuing (`reject(requeue=False)`), routing it to the Dead-Letter Queue (DLQ) and updating task status to `DEAD_LETTERED`
 - Implements `signal.SIGINT` and `signal.SIGTERM` listeners for clean in-flight task draining before container termination
 
 ### 3.6. Result Retrieval & Operator Feedback Loop
@@ -126,22 +127,23 @@ end
 - **Latency Distribution:** `task_duration_seconds` histogram providing p50, p95, and p99 percentiles for batch processing operations
 - **Stream Metrics:** `items_processed_total` records granular throughput of individual chunk elements
 - **Queue Health & Alarms:** `dead_letter_tasks_total` and `active_worker_tasks` gauge for alerting on worker stall or backlog surge
+- **Cross-Process Cluster Telemetry:** Cluster-wide operational telemetry (`metrics:tasks_completed`, `metrics:items_processed`, `metrics:active_workers`, `metrics:tasks_dead_letter`) is synchronized through shared Redis atomic counters, providing instant consistency for the ops dashboard across multiple isolated worker containers
 - **Automated Validation:** GitHub Actions CI validates test coverage and PEP8 compliance on every push across Python 3.11 and 3.12
 
 ### 3.8. Operations & Support Web Console (`src/static/`, `src/ops_api.py`)
 - **Single-Page Architecture:** Built with Vanilla HTML5/CSS/JS and Chart.js served directly by FastAPI without Node.js build steps or extra containers
-- **Single Source of Truth:** Aggregates telemetry via `GET /api/v1/ops/overview` directly reading from Prometheus instruments and Redis keys in real-time
+- **Single Source of Truth:** Aggregates telemetry via `GET /api/v1/ops/overview` reading cluster-wide Redis counters and Prometheus instruments in real-time
 - **Active Lock Clearance:** Inspects active locks and issues atomic evictions via `POST /api/v1/ops/unlock`
-- **Two-Way DLQ Integration:** Inspects failure stack traces and provides one-click `POST /api/v1/ops/dlq/replay` to re-enqueue messages back into the primary exchange
+- **Two-Way DLQ Integration & Full Payload Replay:** Inspects failure stack traces and provides one-click `POST /api/v1/ops/dlq/replay`; automatically retrieves preserved original task payloads from Redis (`task:data:{task_id}`), resets retry attempts, and re-enqueues back into the primary exchange
 - **Structured Incident Dossier:** `POST /api/v1/ops/escalate` automatically collates execution traces, parameters, and queue states into standardized Markdown reports for L3/Dev bug trackers; accessible globally via header button or contextually from DLQ rows
 - **Dedicated Operator Guide:** See [Web Console Operator Guide](WEB_CONSOLE_GUIDE.md) for full interactive workflows, charts interpretation, and triage procedures
 
 ### 3.9. Idempotency & Deduplication Subsystem (`src/schemas.py`, `src/api.py`)
 - **The Problem:** In distributed environments, network blips, operator double-clicks, and client-side retries frequently trigger duplicate task dispatch. Without deduplication, this causes redundant database writes, resource waste, and billing discrepancies
 - **Dual Intake Support:** The API inspects the standard HTTP header `Idempotency-Key` as well as the JSON body field `idempotency_key`
-- **Atomic Cache Pattern:** When a request with an idempotency key arrives, the producer checks Redis key `idempotency:{token}`:
-  - **Cache Hit (Duplicate Request):** The producer suppresses dispatch to RabbitMQ, logs the deduplication event, and returns a `TaskResponse` containing the original `task_id` with `is_duplicate: true`
-  - **Cache Miss (New Request):** A new `TaskMessage` is generated and published to RabbitMQ. The mapping `idempotency:{token} -> task_id` is atomically registered in Redis with a 24-hour TTL (`ex=86400`)
+- **Atomic SET NX Claim:** The idempotency token is claimed via atomic `SET idempotency:{token} {task_id} NX EX 86400` *before* broker dispatch. If a duplicate or concurrent request arrives, `SET NX` fails immediately, completely eliminating TOCTOU race conditions:
+  - **Cache Hit (Duplicate Request):** The producer suppresses dispatch to RabbitMQ, retrieves current task status from Redis, logs the deduplication event, and returns a `TaskResponse` containing the original `task_id` with `is_duplicate: true`
+  - **Cache Miss (New Request):** A new `TaskMessage` is generated and published to RabbitMQ. If broker dispatch fails, the key is rolled back to permit safe client retries
 - **Broker Protection:** Downstream RabbitMQ queues and background workers remain completely insulated from redundant network retries
 
 ### 3.10. Structured JSON Logging & Distributed Tracing (`src/logging_config.py`)
