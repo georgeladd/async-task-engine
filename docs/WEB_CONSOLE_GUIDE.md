@@ -53,7 +53,7 @@ Located at the top of every console view, the header provides instant cluster he
 Four primary KPI cards visualize system load and processing health at a glance:
 
 1. **Queue Backlog (`#kpi-queue-depth`):**
-   - Number of tasks currently enqueued in the primary RabbitMQ exchange awaiting worker pick-up
+   - Number of tasks currently enqueued in the primary RabbitMQ queue (`tasks_primary`) awaiting worker pick-up
    - *Healthy Range:* 0 to 50 tasks during normal operations
    - *Alarm Threshold:* > 500 tasks accumulating with zero active workers
 2. **In-Flight Tasks (`#kpi-in-flight`):**
@@ -144,8 +144,8 @@ When an issue requires backend developer investigation, support can generate a c
 
 #### Diagnostic Context
 - **Environment:** `production`
-- **RabbitMQ Main Queue:** `tasks.primary`
-- **Dead-Letter Queue:** `tasks.dead_letter`
+- **RabbitMQ Main Queue:** `tasks_primary`
+- **Dead-Letter Queue:** `tasks_dead_letter`
 - **Runtime Diagnostics:**
 ```text
 psycopg2.OperationalError: server closed the connection unexpectedly

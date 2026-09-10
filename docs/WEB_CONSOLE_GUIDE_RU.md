@@ -53,7 +53,7 @@ flowchart TD
 Четыре информационные карточки позволяют мгновенно оценить нагрузку и состояние обработки:
 
 1. **Queue Backlog (`#kpi-queue-depth`):**
-   - Количество задач, ожидающих обработки в первичной очереди RabbitMQ
+   - Количество задач, ожидающих обработки в первичной очереди RabbitMQ (`tasks_primary`)
    - *Норма:* от 0 до 50 задач при стабильном потоке
    - *Тревога:* более 500 задач при отсутствии активных воркеров
 2. **In-Flight Tasks (`#kpi-in-flight`):**
@@ -144,8 +144,8 @@ flowchart TD
 
 #### Diagnostic Context
 - **Environment:** `production`
-- **RabbitMQ Main Queue:** `tasks.primary`
-- **Dead-Letter Queue:** `tasks.dead_letter`
+- **RabbitMQ Main Queue:** `tasks_primary`
+- **Dead-Letter Queue:** `tasks_dead_letter`
 - **Runtime Diagnostics:**
 ```text
 psycopg2.OperationalError: server closed the connection unexpectedly
