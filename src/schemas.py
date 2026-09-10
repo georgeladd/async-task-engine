@@ -155,3 +155,14 @@ class WebhookDeliveryPayload(BaseModel):
         default_factory=lambda: datetime.now(timezone.utc),
         description="Webhook transmission timestamp",
     )
+
+
+class TaskStatusResponse(BaseModel):
+    """Schema for task status query endpoint responses."""
+
+    task_id: UUID = Field(..., description="Task UUID")
+    status: TaskStatus = Field(..., description="Current execution status")
+    result: TaskResult | str | None = Field(
+        default=None,
+        description="Task execution metrics or raw result payload",
+    )
