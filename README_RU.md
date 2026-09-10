@@ -84,19 +84,20 @@ flowchart TD
     Client <-->|2. Опрос статуса GET /tasks/id| API
 
     API -->|Регистрация начального статуса| Cache[(Redis Статусы и Результаты)]
-    API -->|Публикация AMQP события| RMQ_Main{RabbitMQ Direct Exchange}
+    API -->|Публикация AMQP события| RMQ_Main{RabbitMQ Topic Exchange tasks.topic}
     
-    RMQ_Main -->|tasks_primary| Worker[Async Worker Consumer]
+    RMQ_Main -->|tasks.general.*| Worker[Async Worker Consumer tasks_primary]
+    RMQ_Main -.->|Резервный сброс| AE[Alternate Exchange tasks.ae] --> UnroutedQ[(tasks_unrouted)]
     
     subgraph Исполнение под распределенной блокировкой
         Worker -->|Захват с TTL| Lock[(Redis Distributed Lock)]
         Worker -->|Потоковая итерация чанками| Chunker[Memory-Safe Chunker Engine]
-        Chunker -->|Пакетная обработка записей| Storage[(Целевая БД / ClickHouse)]
+        Chunker -->|Пакетная обработка записей| Storage[(Целевая БД / API)]
     end
 
     Worker -->|Обновление статуса и метрик JSON| Cache
     
-    Worker -.->|Лимит ретраев исчерпан| DLX{Dead-Letter Exchange}
+    Worker -.->|Лимит ретраев / Фатальный сбой| DLX{Dead-Letter Exchange tasks.dlx}
     DLX -->|tasks_dead_letter| DLQ[(Dead-Letter Queue)]
     DLQ -.-> AlertBot[Telegram / Slack Бот]
     AlertBot -.->|Алерт о сбое со ссылкой на задачу| Client
@@ -127,18 +128,19 @@ docker compose up -d --build
 git clone git@github.com:georgeladd/async-task-engine.git
 cd async-task-engine
 
-# Создание и активация виртуального окружения
-python3 -m venv .venv
+# Создание и активация виртуального окружения через uv (или python venv)
+uv venv .venv
 source .venv/bin/activate
 
-# Установка зависимостей
-pip install -r requirements.dev.txt
+# Установка зависимостей и клиентского SDK
+uv pip install -r requirements.dev.txt
+uv pip install -e .
 
 # Запуск полного набора тестов с анализом покрытия
-pytest -v --cov=src tests/
+uv run pytest -v --cov=src tests/
 
 # Запуск линтера
-ruff check src tests
+uv run ruff check src tests
 ```
 
 ---
@@ -157,23 +159,23 @@ ruff check src tests
 
 ## 🛠️ Консольная утилита поддержки (Ops CLI)
 
-Специализированная консольная утилита для быстрой диагностики и автоматизации рутинных процедур:
+Специализированная консольная утилита для быстрой диагностики и автоматизации рутинных процедур (`async-engine` или `python -m src.cli`):
 
 ```bash
 # Проверка сетевой связности и состояния сервиса
-python -m src.cli health
+async-engine health
 
 # Отправка задачи напрямую из терминала
-python -m src.cli submit --type data_cleanup --resource tenant_42 --priority high --items 100
+async-engine submit --type http_batch --resource tenant_42 --priority high --items 100
 
 # Запрос прогресса выполнения и метрик задачи
-python -m src.cli status 550e8400-e29b-41d4-a716-446655440000
+async-engine status 550e8400-e29b-41d4-a716-446655440000
 
 # Просмотр всех активных распределенных блокировок в Redis
-python -m src.cli locks
+async-engine locks
 
 # Ручное снятие зависшей блокировки ресурса
-python -m src.cli unlock tenant_42
+async-engine unlock tenant_42
 ```
 
 ---
@@ -222,18 +224,25 @@ curl "http://localhost:8000/api/v1/tasks/550e8400-e29b-41d4-a716-446655440000"
 
 ## 🧪 Стратегия тестирования
 
-Проект покрыт 49 автоматическими тестами, валидирующими критические пути исполнения:
+Проект покрыт **94 автоматическими тестами** с высоким общим покрытием (>80%), валидирующими критические пути исполнения:
+- **`tests/test_broker_topic.py`**: Топология Topic Exchange, Alternate Exchange fallback, динамическая привязка очередей консьюмерами и изоляция маршрутов
+- **`tests/test_client.py`**: Интеграция клиентского Async Python SDK, диспетчеризация, wait_completion и обработка ошибок сервера
+- **`tests/test_config_fail_fast.py`**: Проверка безопасности Fail-Fast, блокировка слабых секретов и локальных вебхуков в production
+- **`tests/test_handlers.py`**: Реестр обработчиков, строгий отказ неизвестных типов, SSRF валидация и пакетный upsert в SQLite
 - **`tests/test_chunker.py`**: Потоковое разбиение на чанки, обработка неровных остатков и границы памяти генераторов
 - **`tests/test_redis_lock.py`**: Атомарное снятие блокировки через Lua-скрипт, обработка тайм-аутов и предотвращение гонок
 - **`tests/test_api.py`**: Валидация входных схем FastAPI, отправка в брокер очередей и обработка ошибок
 - **`tests/test_idempotency.py`**: Подавление повторных отправок, TTL-кэш в Redis, паритет заголовка и тела запроса, изоляция очереди RabbitMQ
 - **`tests/test_logging.py`**: Схема структурированного JSON-форматтера, проброс correlation_id через contextvars и сериализация исключений
 - **`tests/test_rate_limiter.py`**: Всплески емкости Token Bucket, сон при дефиците токенов, неблокирующий try_acquire и темп воркера
+- **`tests/test_security.py`**: Валидация SSRF, блокировка подсетей IPv4/IPv6, link-local и вычисление подписей HMAC-SHA256
 - **`tests/test_webhooks.py`**: Асинхронная доставка HTTP вебхуков, валидация схемы событий и изоляция сетевых сбоев
+- **`tests/test_worker.py`**: Обработка AMQP сообщений воркером, счетчик попыток в Redis, трекинг in-flight и мгновенный DLQ reject для необратимых ошибок
 - **`tests/test_cli.py`**: Проверка команд консольной утилиты саппорта, парсинг аргументов и снятие локов
 - **`tests/test_metrics.py`**: Счетчики, гистограммы задержек и формат отдачи метрик `/metrics` для Prometheus
 - **`tests/test_ops_api.py`**: Раздача веб-консоли, эндпоинты агрегации метрик, инспекция локов, Replay из DLQ и генерация отчетов инцидентов
 - **`tests/test_schemas.py`**: Корректность строгой сериализации схем Pydantic v2
+- **`tests/test_package_init.py`**: Экспорт публичных интерфейсов из корня пакета
 
 ---
 

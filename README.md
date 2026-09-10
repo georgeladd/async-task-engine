@@ -84,19 +84,20 @@ flowchart TD
     Client <-->|2. Poll Status & Results GET /tasks/id| API
 
     API -->|Register Initial Status| Cache[(Redis Task Status & Results)]
-    API -->|Publish AMQP Event| RMQ_Main{RabbitMQ Direct Exchange}
+    API -->|Publish AMQP Event| RMQ_Main{RabbitMQ Topic Exchange tasks.topic}
     
-    RMQ_Main -->|tasks_primary| Worker[Async Worker Consumer]
+    RMQ_Main -->|tasks.general.*| Worker[Async Worker Consumer tasks_primary]
+    RMQ_Main -.->|Unrouted fallback| AE[Alternate Exchange tasks.ae] --> UnroutedQ[(tasks_unrouted)]
     
     subgraph Execution Under Distributed Lock
         Worker -->|Acquire with TTL| Lock[(Redis Distributed Lock)]
         Worker -->|Stream in Chunks| Chunker[Memory-Safe Chunker Engine]
-        Chunker -->|Execute Batch Logic| Storage[(Target DB / ClickHouse)]
+        Chunker -->|Execute Batch Logic| Storage[(Target DB / API)]
     end
 
     Worker -->|Update Status & Metrics JSON| Cache
     
-    Worker -.->|Retries Exceeded| DLX{Dead-Letter Exchange}
+    Worker -.->|Retries Exceeded / Fatal Error| DLX{Dead-Letter Exchange tasks.dlx}
     DLX -->|tasks_dead_letter| DLQ[(Dead-Letter Queue)]
     DLQ -.-> AlertBot[Telegram / Slack Bot]
     AlertBot -.->|Failure Alert with Link| Client
@@ -127,18 +128,19 @@ docker compose up -d --build
 git clone git@github.com:georgeladd/async-task-engine.git
 cd async-task-engine
 
-# Create and activate virtualenv
-python3 -m venv .venv
+# Create and activate virtualenv via uv (or python venv)
+uv venv .venv
 source .venv/bin/activate
 
-# Install dependencies
-pip install -r requirements.dev.txt
+# Install dependencies and client SDK
+uv pip install -r requirements.dev.txt
+uv pip install -e .
 
 # Run full test suite with coverage
-pytest -v --cov=src tests/
+uv run pytest -v --cov=src tests/
 
 # Run linter
-ruff check src tests
+uv run ruff check src tests
 ```
 
 ---
@@ -157,23 +159,23 @@ The engine features a built-in, lightweight web console for L2/L3 support and on
 
 ## 🛠️ Operations & Support CLI
 
-A dedicated command-line utility for L2/L3 support and operations automation:
+A dedicated command-line utility for L2/L3 support and operations automation (`async-engine` or `python -m src.cli`):
 
 ```bash
 # Check service connectivity and status
-python -m src.cli health
+async-engine health
 
 # Submit task directly from terminal
-python -m src.cli submit --type data_cleanup --resource tenant_42 --priority high --items 100
+async-engine submit --type http_batch --resource tenant_42 --priority high --items 100
 
 # Query task execution progress and result metrics
-python -m src.cli status 550e8400-e29b-41d4-a716-446655440000
+async-engine status 550e8400-e29b-41d4-a716-446655440000
 
 # Inspect all active distributed locks in Redis
-python -m src.cli locks
+async-engine locks
 
 # Manually release an orphaned or stuck resource lock
-python -m src.cli unlock tenant_42
+async-engine unlock tenant_42
 ```
 
 ---
@@ -222,18 +224,25 @@ curl "http://localhost:8000/api/v1/tasks/550e8400-e29b-41d4-a716-446655440000"
 
 ## 🧪 Testing Strategy
 
-The repository maintains 100% unit and integration coverage across 49 test cases:
+The repository maintains strict verification and high coverage (>80%) across **94 test cases**:
+- **`tests/test_broker_topic.py`**: Topic Exchange topology, Alternate Exchange fallback, dynamic consumer queue binding, and queue routing isolation
+- **`tests/test_client.py`**: Async Python Client SDK integration, dispatch, wait_completion, and server error handling
+- **`tests/test_config_fail_fast.py`**: Production security validation, secret strength enforcement, and local webhook blocking
+- **`tests/test_handlers.py`**: Handler registry pattern, strict unknown type rejection, SSRF checks, and SQLite bulk upsert
 - **`tests/test_chunker.py`**: Stream slicing, uneven division, and memory generator boundaries
 - **`tests/test_redis_lock.py`**: Atomic Lua script release, lock timeout handling, and race condition prevention
 - **`tests/test_api.py`**: FastAPI request validation, AMQP mock dispatch, and error handling
 - **`tests/test_idempotency.py`**: Duplicate request suppression, Redis TTL caching, header & body token parity, and queue isolation
 - **`tests/test_logging.py`**: Structured JSON formatter schema, contextvars correlation propagation, and exception serialization
 - **`tests/test_rate_limiter.py`**: Token Bucket capacity bursts, deficit sleep enforcement, non-blocking try_acquire, and worker pacing
+- **`tests/test_security.py`**: SSRF validation, IPv4/IPv6 private subnets, link-local blocking, and HMAC-SHA256 signatures
 - **`tests/test_webhooks.py`**: Asynchronous webhook notification delivery, status schema validation, and HTTP failure isolation
+- **`tests/test_worker.py`**: Worker message handling, Redis attempt counters, in-flight tracking, and instant unrecoverable DLQ routing
 - **`tests/test_cli.py`**: Support CLI subcommands, health checks, argument parsing, and lock clearance
 - **`tests/test_metrics.py`**: Prometheus gauges, counters, histograms, and `/metrics` exposition format
 - **`tests/test_ops_api.py`**: Dashboard HTML serving, aggregated overview telemetry, distributed locks management, DLQ inspection, task replay, and incident escalation dossier generation
 - **`tests/test_schemas.py`**: Pydantic v2 serialization integrity
+- **`tests/test_package_init.py`**: Root package exports and interfaces
 
 ---
 
