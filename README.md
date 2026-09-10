@@ -23,6 +23,7 @@ Production-grade asynchronous task execution engine designed for internal tools,
 |---|---|---|
 | **[System Architecture Specification](docs/ARCHITECTURE.md)** | Backend Engineers, Architects | Invariants, AMQP topology, Redis Lua locks, chunked batch streaming, trade-offs |
 | **[Support Runbook & Incident Playbook](docs/SUPPORT_RUNBOOK.md)** | L2/L3 Support, Operations, SRE | 5-min onboarding, 30-sec triage checklist, incident matrix & copy-paste CLI fix commands |
+| **[Web Console Operator Guide](docs/WEB_CONSOLE_GUIDE.md)** | Support Engineers, Operators | Live charts, lock removal, self-service task runner, DLQ triage, incident dossier workflow |
 
 ---
 

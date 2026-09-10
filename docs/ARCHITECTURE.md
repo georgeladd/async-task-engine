@@ -134,6 +134,7 @@ end
 - **Active Lock Clearance:** Inspects active locks and issues atomic evictions via `POST /api/v1/ops/unlock`
 - **Two-Way DLQ Integration:** Inspects failure stack traces and provides one-click `POST /api/v1/ops/dlq/replay` to re-enqueue messages back into the primary exchange
 - **Structured Incident Dossier:** `POST /api/v1/ops/escalate` automatically collates execution traces, parameters, and queue states into standardized Markdown reports for L3/Dev bug trackers; accessible globally via header button or contextually from DLQ rows
+- **Dedicated Operator Guide:** See [Web Console Operator Guide](WEB_CONSOLE_GUIDE.md) for full interactive workflows, charts interpretation, and triage procedures
 
 ### 3.9. Idempotency & Deduplication Subsystem (`src/schemas.py`, `src/api.py`)
 - **The Problem:** In distributed environments, network blips, operator double-clicks, and client-side retries frequently trigger duplicate task dispatch. Without deduplication, this causes redundant database writes, resource waste, and billing discrepancies

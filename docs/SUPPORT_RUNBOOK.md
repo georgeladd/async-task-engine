@@ -11,7 +11,7 @@ Welcome to the operational runbook for **Async Task Engine**. This document is d
 ### 1.1. Core Components & Access Points
 | Component | Default Port | Internal Role | Web UI / Dashboard |
 |---|---|---|---|
-| **Operations Web Console** | `8000` | Primary L2 triage: live charts, 1-click lock release, DLQ replay | [http://localhost:8000/dashboard](http://localhost:8000/dashboard) |
+| **Operations Web Console** | `8000` | Primary L2 triage: live charts, 1-click lock release, DLQ replay | [http://localhost:8000/dashboard](http://localhost:8000/dashboard) ([User Guide](WEB_CONSOLE_GUIDE.md)) |
 | **API Producer** | `8000` | Ingests tasks, assigns UUIDs, updates Redis status | [http://localhost:8000/docs](http://localhost:8000/docs) |
 | **Prometheus Telemetry** | `8000` | Real-time scrape endpoint for Grafana | [http://localhost:8000/metrics](http://localhost:8000/metrics) |
 | **RabbitMQ** | `5672` / `15672` | Direct exchange, primary queue & Dead-Letter Queue | [http://localhost:15672](http://localhost:15672) (`guest` / `guest`) |

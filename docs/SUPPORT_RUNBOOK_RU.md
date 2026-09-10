@@ -11,7 +11,7 @@
 ### 1.1. Ключевые компоненты и точки доступа
 | Компонент | Порт | Роль в системе | Интерфейс / Доступ |
 |---|---|---|---|
-| **Веб-консоль управления** | `8000` | Первичная диагностика L2: графики, снятие локов в 1 клик, Replay из DLQ | [http://localhost:8000/dashboard](http://localhost:8000/dashboard) |
+| **Веб-консоль управления** | `8000` | Первичная диагностика L2: графики, снятие локов в 1 клик, Replay из DLQ | [http://localhost:8000/dashboard](http://localhost:8000/dashboard) ([Руководство](WEB_CONSOLE_GUIDE_RU.md)) |
 | **FastAPI Producer** | `8000` | Прием задач, генерация UUID, запись статуса в Redis | [http://localhost:8000/docs](http://localhost:8000/docs) |
 | **Метрики Prometheus** | `8000` | Скрейпинг метрик в реальном времени для Grafana | [http://localhost:8000/metrics](http://localhost:8000/metrics) |
 | **RabbitMQ** | `5672` / `15672` | Direct exchange, основная очередь и Dead-Letter Queue | [http://localhost:15672](http://localhost:15672) (`guest` / `guest`) |
