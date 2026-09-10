@@ -1,5 +1,7 @@
 # System Architecture Specification
 
+🌐 **[English](ARCHITECTURE.md)** • **[Русский](ARCHITECTURE_RU.md)**
+
 This document details the architectural design, core invariants, data flow models, and technical trade-offs implemented in **Async Task Engine**
 
 ---
