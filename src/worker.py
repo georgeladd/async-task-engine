@@ -35,6 +35,7 @@ from src.schemas import (
     TaskStatus,
     WebhookDeliveryPayload,
 )
+from src.security import generate_hmac_signature, is_safe_webhook_url
 
 setup_logging(settings.log_level, json_mode=True)
 logger = logging.getLogger("worker")
@@ -127,6 +128,18 @@ class TaskWorker:
             status: Final status of the task.
             result: Optional TaskResult output.
         """
+        # Validate target destination to prevent SSRF against internal/cloud infrastructure
+        is_safe, error_reason = is_safe_webhook_url(
+            callback_url,
+            allow_local=settings.allow_local_webhooks,
+        )
+        if not is_safe:
+            logger.warning(
+                f"SSRF security alert: Rejected webhook dispatch for task {task.task_id} "
+                f"to {callback_url}: {error_reason}"
+            )
+            return
+
         payload = WebhookDeliveryPayload(
             event=event,
             task_id=task.task_id,
@@ -135,15 +148,23 @@ class TaskWorker:
             status=status,
             result=result,
         )
+        payload_bytes = payload.model_dump_json().encode("utf-8")
+        signature = generate_hmac_signature(
+            payload_bytes,
+            settings.webhook_signing_secret,
+        )
+
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
                 response = await client.post(
                     callback_url,
-                    json=payload.model_dump(mode="json"),
+                    content=payload_bytes,
                     headers={
+                        "Content-Type": "application/json",
                         "User-Agent": "Async-Task-Engine-Webhook/1.0",
                         "X-Task-ID": str(task.task_id),
                         "X-Event-Type": event,
+                        "X-Hub-Signature-256": signature,
                     },
                 )
                 if response.is_success:

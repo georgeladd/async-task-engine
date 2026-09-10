@@ -1,5 +1,4 @@
-"""Unit tests for asynchronous webhook callback dispatch and error isolation."""
-
+import json
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
@@ -14,7 +13,7 @@ from src.worker import TaskWorker
 async def test_webhook_delivery_success() -> None:
     """Verifies that worker dispatches valid HTTP POST notification upon completion."""
     worker = TaskWorker()
-    callback_url = "https://ops-webhook.internal/callbacks/task-done"
+    callback_url = "https://api.external.com/callbacks/task-done"
     task = TaskMessage(
         task_id=uuid4(),
         task_type="billing_reconciliation",
@@ -30,7 +29,10 @@ async def test_webhook_delivery_success() -> None:
         execution_time_seconds=0.45,
     )
 
-    with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+    with (
+        patch("src.worker.is_safe_webhook_url", return_value=(True, "")),
+        patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post,
+    ):
         mock_response = AsyncMock()
         mock_response.is_success = True
         mock_response.status_code = 200
@@ -49,9 +51,13 @@ async def test_webhook_delivery_success() -> None:
         assert args[0] == callback_url
         assert kwargs["headers"]["X-Task-ID"] == str(task.task_id)
         assert kwargs["headers"]["X-Event-Type"] == "task.completed"
-        assert kwargs["json"]["event"] == "task.completed"
-        assert kwargs["json"]["status"] == "completed"
-        assert kwargs["json"]["result"]["processed_count"] == 100
+        assert "X-Hub-Signature-256" in kwargs["headers"]
+        assert kwargs["headers"]["X-Hub-Signature-256"].startswith("sha256=")
+
+        body = json.loads(kwargs["content"].decode("utf-8"))
+        assert body["event"] == "task.completed"
+        assert body["status"] == "completed"
+        assert body["result"]["processed_count"] == 100
 
 
 @pytest.mark.asyncio
@@ -62,10 +68,13 @@ async def test_webhook_delivery_failure_is_isolated() -> None:
         task_id=uuid4(),
         task_type="audit_sync",
         resource_id="tenant_delta",
-        callback_url="https://unreachable-host.local/webhook",
+        callback_url="https://api.external.com/webhook",
     )
 
-    with patch("httpx.AsyncClient.post", side_effect=httpx.ConnectTimeout("Connection timed out")):
+    with (
+        patch("src.worker.is_safe_webhook_url", return_value=(True, "")),
+        patch("httpx.AsyncClient.post", side_effect=httpx.ConnectTimeout("Connection timed out")),
+    ):
         # Must execute cleanly without raising exception
         await worker.dispatch_webhook(
             callback_url=str(task.callback_url),
@@ -79,7 +88,7 @@ async def test_webhook_delivery_failure_is_isolated() -> None:
 async def test_webhook_dead_letter_delivery() -> None:
     """Verifies that dead-lettered tasks dispatch failure webhooks."""
     worker = TaskWorker()
-    callback_url = "https://ops.corp/dlq-alerts"
+    callback_url = "https://api.external.com/dlq-alerts"
     task = TaskMessage(
         task_id=uuid4(),
         task_type="payment_sync",
@@ -87,7 +96,10 @@ async def test_webhook_dead_letter_delivery() -> None:
         callback_url=callback_url,
     )
 
-    with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+    with (
+        patch("src.worker.is_safe_webhook_url", return_value=(True, "")),
+        patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post,
+    ):
         mock_response = AsyncMock()
         mock_response.is_success = True
         mock_post.return_value = mock_response
@@ -102,6 +114,8 @@ async def test_webhook_dead_letter_delivery() -> None:
 
         assert mock_post.call_count == 1
         kwargs = mock_post.call_args[1]
-        assert kwargs["json"]["event"] == "task.dead_lettered"
-        assert kwargs["json"]["status"] == "dead_lettered"
-        assert kwargs["json"]["result"] is None
+        assert "X-Hub-Signature-256" in kwargs["headers"]
+        body = json.loads(kwargs["content"].decode("utf-8"))
+        assert body["event"] == "task.dead_lettered"
+        assert body["status"] == "dead_lettered"
+        assert body["result"] is None
