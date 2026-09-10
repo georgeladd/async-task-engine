@@ -121,3 +121,28 @@ async def test_ops_escalate_incident(async_client: AsyncClient, mock_redis: Asyn
         assert "INC-" in data["incident_id"]
         assert task_uuid in data["markdown_dossier"]
         assert "Customer experienced failure" in data["markdown_dossier"]
+
+
+@pytest.mark.asyncio
+async def test_ops_escalate_running_task(async_client: AsyncClient, mock_redis: AsyncMock) -> None:
+    """Tests compiling an incident report for a running/stalled task."""
+    with patch("src.ops_api._get_redis_client", return_value=mock_redis):
+        task_uuid = str(uuid4())
+
+        async def redis_get_side_effect(key: str) -> str | None:
+            if key == f"task:status:{task_uuid}":
+                return "running"
+            return None
+
+        mock_redis.get = AsyncMock(side_effect=redis_get_side_effect)
+
+        payload = {
+            "task_id": task_uuid,
+            "operator_comment": "Task seems stalled in worker event loop",
+        }
+        response = await async_client.post("/api/v1/ops/escalate", json=payload)
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "escalated"
+        assert "RUNNING" in data["markdown_dossier"]
+        assert "stalled in worker event loop" in data["markdown_dossier"]

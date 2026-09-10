@@ -337,37 +337,67 @@ async def escalate_task_incident(request: EscalateRequest) -> EscalateResponse:
     """Compiles an incident dossier with runtime context and diagnostics for L3/Dev escalations.
 
     Args:
-        request: Failing task UUID and optional operator notes.
+        request: Target task UUID and optional operator notes.
 
     Returns:
         EscalateResponse containing unique incident ID and Markdown report.
     """
     redis = _get_redis_client()
     incident_id: str = f"INC-{str(uuid4())[:8].upper()}"
+    status_key = f"task:status:{request.task_id}"
     result_key = f"task:result:{request.task_id}"
 
-    error_detail: str = "Unknown root cause"
+    current_status: str = "UNKNOWN / UNREGISTERED"
+    error_detail: str = "No recorded error details"
     try:
+        raw_status = await redis.get(status_key)
+        if raw_status:
+            current_status = raw_status.upper()
+
         raw_result = await redis.get(result_key)
         if raw_result:
             error_detail = raw_result
+    except (RedisError, OSError) as err:
+        logger.warning(f"Failed to query Redis context for incident {request.task_id}: {err}")
     finally:
         await redis.close()
 
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     operator_notes = request.operator_comment or "No additional notes provided by operator"
 
+    if current_status == "RUNNING":
+        action_recommendation = (
+            "1. Inspect worker health and verify whether distributed lock is stalled\n"
+            "2. Review thread activity and connection pool saturation in Grafana"
+        )
+    elif current_status in ("DEAD_LETTERED", "FAILED"):
+        action_recommendation = (
+            "1. Inspect payload format against active database schemas\n"
+            "2. Verify downstream database connection pool saturation\n"
+            "3. After patch deployment, execute replay via POST /api/v1/ops/dlq/replay"
+        )
+    elif current_status == "PENDING":
+        action_recommendation = (
+            "1. Verify RabbitMQ consumer queue bindings and active worker count\n"
+            "2. Check if primary queue consumer is experiencing backlog throttling"
+        )
+    else:
+        action_recommendation = (
+            "1. Verify task UUID correctness with customer\n"
+            "2. Inspect Redis TTL logs or archived log stream in Loki/Elasticsearch"
+        )
+
     dossier: str = f"""### Incident Report: {incident_id}
 **Service:** {settings.app_name}
 **Timestamp:** {timestamp}
 **Target Task UUID:** `{request.task_id}`
-**Status:** `CRITICAL / DEAD-LETTERED`
+**Current Status:** `{current_status}`
 
 #### Diagnostic Context
 - **Environment:** `{settings.environment}`
 - **RabbitMQ Main Queue:** `{settings.rabbitmq_main_queue}`
 - **Dead-Letter Queue:** `{settings.rabbitmq_dlq_queue}`
-- **Error Traceback:**
+- **Runtime Diagnostics:**
 ```text
 {error_detail}
 ```
@@ -376,9 +406,7 @@ async def escalate_task_incident(request: EscalateRequest) -> EscalateResponse:
 > {operator_notes}
 
 #### Recommended Immediate Actions (L3 / Dev)
-1. Inspect payload format against active database schemas
-2. Verify downstream database connection pool saturation
-3. After patch deployment, execute replay via `POST /api/v1/ops/dlq/replay`
+{action_recommendation}
 """
 
     return EscalateResponse(

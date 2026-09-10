@@ -48,6 +48,7 @@
           <option value="0">Manual</option>
         </select>
         <button id="btn-refresh" class="btn btn-outline" title="Refresh metrics now">⟳ Refresh</button>
+        <button id="btn-open-escalate-header" class="btn btn-danger" title="Create incident dossier for engineering">🚨 Create Incident</button>
       </div>
     </header>
 
@@ -224,6 +225,10 @@
         </div>
         <div class="modal-body">
           <p>This will compile an automated Incident Dossier with complete runtime context, queue logs, and database parameters for bug tracking:</p>
+          <div class="form-group">
+            <label for="escalate-task-id-input">Target Task UUID:</label>
+            <input type="text" id="escalate-task-id-input" class="form-input" placeholder="e.g. 550e8400-e29b-41d4-a716-446655440000" required>
+          </div>
           <div class="form-group">
             <label for="operator-notes">Operator Observations (What was the user or system doing?):</label>
             <textarea id="operator-notes" class="form-textarea" rows="3" placeholder="e.g. Occurred after customer initiated batch export with custom filters"></textarea>

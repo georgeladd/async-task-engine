@@ -125,6 +125,11 @@ function setupEventListeners() {
   });
 
   // Escalation Modal listeners
+  const btnOpenEscalate = document.getElementById("btn-open-escalate-header");
+  if (btnOpenEscalate) {
+    btnOpenEscalate.addEventListener("click", () => openEscalateModal());
+  }
+
   document.getElementById("btn-close-modal").addEventListener("click", closeModal);
   document.getElementById("btn-cancel-modal").addEventListener("click", closeModal);
   document.getElementById("btn-generate-dossier").addEventListener("click", generateDossier);
@@ -359,14 +364,26 @@ async function handleTaskDispatch() {
 }
 
 // 5. Incident Escalation Modal
-function openEscalateModal(taskId) {
-  currentEscalationTaskId = taskId;
-  document.getElementById("modal-title").innerText = `Escalate Task: ${taskId.substring(0, 8)}...`;
+function openEscalateModal(taskId = "") {
+  currentEscalationTaskId = taskId || "";
+  const taskInput = document.getElementById("escalate-task-id-input");
+  taskInput.value = taskId || "";
+
+  if (taskId) {
+    document.getElementById("modal-title").innerText = `Escalate Task: ${taskId.substring(0, 8)}...`;
+  } else {
+    document.getElementById("modal-title").innerText = "Create Incident Dossier";
+  }
+
   document.getElementById("operator-notes").value = "";
   document.getElementById("dossier-preview-wrapper").style.display = "none";
   document.getElementById("btn-generate-dossier").style.display = "inline-flex";
   document.getElementById("btn-copy-dossier").style.display = "none";
   document.getElementById("escalation-modal").style.display = "flex";
+
+  if (!taskId) {
+    taskInput.focus();
+  }
 }
 
 function closeModal() {
@@ -375,16 +392,30 @@ function closeModal() {
 }
 
 async function generateDossier() {
+  const taskId = document.getElementById("escalate-task-id-input").value.trim();
   const notes = document.getElementById("operator-notes").value.trim();
+
+  if (!taskId) {
+    showToast("Please provide a valid Task UUID", "danger");
+    document.getElementById("escalate-task-id-input").focus();
+    return;
+  }
+
   try {
     const res = await fetch("/api/v1/ops/escalate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        task_id: currentEscalationTaskId,
+        task_id: taskId,
         operator_comment: notes,
       }),
     });
+
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.detail || `HTTP ${res.status}`);
+    }
+
     const data = await res.json();
 
     document.getElementById("dossier-content").innerText = data.markdown_dossier;
