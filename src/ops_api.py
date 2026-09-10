@@ -116,6 +116,14 @@ async def get_ops_overview() -> OpsOverview:
     active_locks_count: int = 0
     dead_letter_count: int = 0
 
+    r_submitted: int = 0
+    r_completed: int = 0
+    r_dlq: int = 0
+    r_items: int = 0
+    r_active: int = 0
+    r_dur_sum: float = 0.0
+    r_dur_cnt: int = 0
+
     try:
         lock_keys = await redis.keys("lock:resource:*")
         active_locks_count = len(lock_keys)
@@ -126,19 +134,26 @@ async def get_ops_overview() -> OpsOverview:
             val = await redis.get(sk)
             if val == TaskStatus.DEAD_LETTERED.value:
                 dead_letter_count += 1
+
+        # Read distributed cluster-wide metrics from Redis
+        r_submitted = int(await redis.get("metrics:tasks_submitted") or 0)
+        r_completed = int(await redis.get("metrics:tasks_completed") or 0)
+        r_dlq = int(await redis.get("metrics:tasks_dead_letter") or 0)
+        r_items = int(await redis.get("metrics:items_processed") or 0)
+        r_active = max(0, int(await redis.get("metrics:active_workers") or 0))
+        r_dur_sum = float(await redis.get("metrics:duration_sum") or 0.0)
+        r_dur_cnt = int(await redis.get("metrics:duration_count") or 0)
     except (RedisError, OSError) as err:
         logger.warning(f"Error querying Redis state during overview aggregation: {err}")
     finally:
         await redis.close()
 
     # Prometheus telemetry calculations
-    active_workers: int = int(ACTIVE_WORKER_TASKS._value.get())
-
-    # Aggregate metric samples
-    submitted: int = int(sum(sample.value for sample in TASKS_SUBMITTED_TOTAL.collect()[0].samples))
-    completed: int = int(sum(sample.value for sample in TASKS_COMPLETED_TOTAL.collect()[0].samples))
-    dlq_metric: int = int(sum(sample.value for sample in DEAD_LETTER_TASKS_TOTAL.collect()[0].samples))
-    items_metric: int = int(sum(sample.value for sample in ITEMS_PROCESSED_TOTAL.collect()[0].samples))
+    prom_active: int = int(ACTIVE_WORKER_TASKS._value.get())
+    prom_submitted: int = int(sum(sample.value for sample in TASKS_SUBMITTED_TOTAL.collect()[0].samples))
+    prom_completed: int = int(sum(sample.value for sample in TASKS_COMPLETED_TOTAL.collect()[0].samples))
+    prom_dlq: int = int(sum(sample.value for sample in DEAD_LETTER_TASKS_TOTAL.collect()[0].samples))
+    prom_items: int = int(sum(sample.value for sample in ITEMS_PROCESSED_TOTAL.collect()[0].samples))
 
     # Duration average
     duration_samples = TASK_DURATION_SECONDS.collect()[0].samples
@@ -150,7 +165,20 @@ async def get_ops_overview() -> OpsOverview:
         elif s.name.endswith("_count"):
             duration_count += s.value
 
-    avg_duration: float = round(duration_sum / max(1.0, duration_count), 3) if duration_count > 0 else 0.0
+    # Prioritize distributed cluster-wide Redis counters; fallback to in-memory Prometheus
+    submitted: int = r_submitted if r_submitted > 0 else prom_submitted
+    completed: int = r_completed if r_completed > 0 else prom_completed
+    dlq_metric: int = max(r_dlq, dead_letter_count) if r_dlq > 0 else max(prom_dlq, dead_letter_count)
+    items_metric: int = r_items if r_items > 0 else prom_items
+    active_workers: int = r_active if r_active > 0 else prom_active
+
+    if r_dur_cnt > 0:
+        avg_duration: float = round(r_dur_sum / r_dur_cnt, 3)
+    elif duration_count > 0:
+        avg_duration = round(duration_sum / duration_count, 3)
+    else:
+        avg_duration = 0.0
+
     sys_status: str = "degraded" if dead_letter_count > 0 or dlq_metric > 0 else "healthy"
 
     overview = OpsOverview(

@@ -34,6 +34,41 @@ async def test_ops_overview_endpoint(async_client: AsyncClient, mock_redis: Asyn
 
 
 @pytest.mark.asyncio
+async def test_ops_overview_reads_distributed_redis_metrics(
+    async_client: AsyncClient, mock_redis: AsyncMock
+) -> None:
+    """Verifies that ops overview correctly aggregates cross-process Redis metrics from workers."""
+    with patch("src.ops_api._get_redis_client", return_value=mock_redis):
+        mock_redis.keys = AsyncMock(return_value=[])
+
+        redis_metrics = {
+            "metrics:tasks_submitted": "50",
+            "metrics:tasks_completed": "45",
+            "metrics:tasks_dead_letter": "2",
+            "metrics:items_processed": "4500",
+            "metrics:active_workers": "3",
+            "metrics:duration_sum": "9.0",
+            "metrics:duration_count": "45",
+        }
+
+        async def redis_metric_get(key: str) -> str | None:
+            return redis_metrics.get(key)
+
+        mock_redis.get = AsyncMock(side_effect=redis_metric_get)
+
+        response = await async_client.get("/api/v1/ops/overview")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["tasks_submitted_total"] == 50
+        assert data["tasks_completed_total"] == 45
+        assert data["tasks_dead_letter_total"] == 2
+        assert data["items_processed_total"] == 4500
+        assert data["active_workers"] == 3
+        assert data["avg_duration_seconds"] == 0.2
+        assert data["queue_primary_depth"] == 3  # 50 - 45 - 2
+
+
+@pytest.mark.asyncio
 async def test_ops_locks_listing(async_client: AsyncClient, mock_redis: AsyncMock) -> None:
     """Tests listing active distributed resource locks."""
     with patch("src.ops_api._get_redis_client", return_value=mock_redis):

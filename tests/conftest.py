@@ -50,9 +50,46 @@ def mock_redis() -> AsyncMock:
             return 1
         return 0
 
+    async def mock_incr(key: str) -> int:
+        val = int(storage.get(key, 0)) + 1
+        storage[key] = val
+        return val
+
+    async def mock_incrby(key: str, amount: int) -> int:
+        val = int(storage.get(key, 0)) + amount
+        storage[key] = val
+        return val
+
+    async def mock_incrbyfloat(key: str, amount: float) -> float:
+        val = float(storage.get(key, 0.0)) + float(amount)
+        storage[key] = val
+        return val
+
+    async def mock_decr(key: str) -> int:
+        val = max(0, int(storage.get(key, 0)) - 1)
+        storage[key] = val
+        return val
+
+    async def mock_delete(*keys: str) -> int:
+        deleted = 0
+        for k in keys:
+            if k in storage:
+                storage.pop(k, None)
+                deleted += 1
+        return deleted
+
+    async def mock_expire(key: str, seconds: int) -> bool:
+        return key in storage
+
     client.set = AsyncMock(side_effect=mock_set)
     client.get = AsyncMock(side_effect=mock_get)
     client.eval = AsyncMock(side_effect=mock_eval)
+    client.incr = AsyncMock(side_effect=mock_incr)
+    client.incrby = AsyncMock(side_effect=mock_incrby)
+    client.incrbyfloat = AsyncMock(side_effect=mock_incrbyfloat)
+    client.decr = AsyncMock(side_effect=mock_decr)
+    client.delete = AsyncMock(side_effect=mock_delete)
+    client.expire = AsyncMock(side_effect=mock_expire)
     client.close = AsyncMock()
     return client
 

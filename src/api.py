@@ -162,10 +162,11 @@ async def submit_task(
             priority=task.priority.value,
         ).inc()
 
-        # Store initial task status and idempotency mapping in Redis
+        # Store initial task status, metrics counter, and idempotency mapping in Redis
         if redis_client:
             task_status_key: str = f"task:status:{task.task_id}"
             await redis_client.set(task_status_key, TaskStatus.PENDING.value, ex=86400)
+            await redis_client.incr("metrics:tasks_submitted")
 
             if idempotency_token:
                 await redis_client.set(

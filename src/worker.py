@@ -92,6 +92,8 @@ class TaskWorker:
             total_processed += len(chunk)
             total_chunks += 1
             ITEMS_PROCESSED_TOTAL.labels(task_type=task.task_type).inc(len(chunk))
+            if self.redis:
+                await self.redis.incrby("metrics:items_processed", len(chunk))
             logger.debug(
                 f"Task {task.task_id}: processed chunk #{total_chunks} "
                 f"({len(chunk)} items, cumulative={total_processed})"
@@ -206,6 +208,8 @@ class TaskWorker:
                 status_key: str = f"task:status:{task.task_id}"
                 result_key: str = f"task:result:{task.task_id}"
                 ACTIVE_WORKER_TASKS.inc()
+                if self.redis:
+                    await self.redis.incr("metrics:active_workers")
 
                 try:
                     await self.redis.set(status_key, TaskStatus.RUNNING.value, ex=86400)
@@ -217,6 +221,10 @@ class TaskWorker:
                     await self.redis.delete(f"task:attempts:{task.task_id}")
                     await message.ack()
                     TASKS_COMPLETED_TOTAL.labels(task_type=task.task_type, status="completed").inc()
+                    if self.redis:
+                        await self.redis.incr("metrics:tasks_completed")
+                        await self.redis.incrbyfloat("metrics:duration_sum", result.execution_time_seconds)
+                        await self.redis.incr("metrics:duration_count")
                     logger.info(
                         f"Task {task.task_id} completed successfully in "
                         f"{result.execution_time_seconds}s ({result.processed_count} items)"
@@ -264,6 +272,8 @@ class TaskWorker:
                         await message.reject(requeue=False)
                         TASKS_COMPLETED_TOTAL.labels(task_type=task.task_type, status="dead_lettered").inc()
                         DEAD_LETTER_TASKS_TOTAL.labels(task_type=task.task_type).inc()
+                        if self.redis:
+                            await self.redis.incr("metrics:tasks_dead_letter")
 
                         # Trigger webhook callback for dead-lettered failure
                         if task.callback_url:
@@ -276,6 +286,8 @@ class TaskWorker:
                             )
                 finally:
                     ACTIVE_WORKER_TASKS.dec()
+                    if self.redis:
+                        await self.redis.decr("metrics:active_workers")
                     await lock.release()
             finally:
                 current_correlation_id.reset(token_corr)

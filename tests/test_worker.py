@@ -44,9 +44,11 @@ async def test_worker_retry_attempts_increment_and_requeue() -> None:
     ):
         await worker.handle_incoming_message(mock_msg)
 
-        # Verified: Redis INCR was called for task attempts
-        worker.redis.incr.assert_called_once_with(f"task:attempts:{task.task_id}")
+        # Verified: Redis INCR was called for task attempts and active workers
+        worker.redis.incr.assert_any_call(f"task:attempts:{task.task_id}")
+        worker.redis.incr.assert_any_call("metrics:active_workers")
         worker.redis.expire.assert_called_once_with(f"task:attempts:{task.task_id}", 86400)
+        worker.redis.decr.assert_called_once_with("metrics:active_workers")
 
         # Verified: Status set back to PENDING and nack(requeue=True) was invoked
         worker.redis.set.assert_any_call(f"task:status:{task.task_id}", TaskStatus.PENDING.value, ex=86400)
