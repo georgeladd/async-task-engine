@@ -274,5 +274,10 @@ async def main() -> int:
     return exit_code
 
 
-if __name__ == "__main__":
+def cli_entrypoint() -> None:
+    """Synchronous console script entrypoint executing the async main routine."""
     sys.exit(asyncio.run(main()))
+
+
+if __name__ == "__main__":
+    cli_entrypoint()
