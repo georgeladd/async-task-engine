@@ -15,6 +15,7 @@ from redis.asyncio import Redis
 from src.broker import MessageBroker
 from src.chunker import chunk_iterator
 from src.config import settings
+from src.handlers import get_handler
 from src.logging_config import (
     current_correlation_id,
     current_resource_id,
@@ -85,11 +86,12 @@ class TaskWorker:
         total_processed: int = 0
         total_chunks: int = 0
 
+        handler = get_handler(task.task_type)
+
         # Execute chunked streaming batch iteration with token bucket throttling
         for chunk in chunk_iterator(items, chunk_size):
             await self.rate_limiter.acquire()
-            # Simulate real batch database/API processing
-            await asyncio.sleep(0.01)
+            await handler(chunk, task.payload.parameters)
             total_processed += len(chunk)
             total_chunks += 1
             ITEMS_PROCESSED_TOTAL.labels(task_type=task.task_type).inc(len(chunk))
