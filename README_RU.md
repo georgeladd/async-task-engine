@@ -7,7 +7,7 @@
 [![RabbitMQ](https://img.shields.io/badge/RabbitMQ-3.13-FF6600.svg)](https://www.rabbitmq.com/)
 [![Redis](https://img.shields.io/badge/Redis-7.0-DC382D.svg)](https://redis.io/)
 [![CI](https://github.com/georgeladd/async-task-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/georgeladd/async-task-engine/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/pytest-66%20passed-brightgreen.svg)](https://docs.pytest.org/)
+[![Tests](https://img.shields.io/badge/pytest-83%20passed-brightgreen.svg)](https://docs.pytest.org/)
 [![Console](https://img.shields.io/badge/Console-Dashboard-009688.svg)](http://localhost:8000/dashboard)
 [![Prometheus](https://img.shields.io/badge/Prometheus-Metrics-E6522C.svg)](http://localhost:8000/metrics)
 [![Архитектура](https://img.shields.io/badge/docs-Архитектура-blue.svg)](docs/ARCHITECTURE_RU.md)
@@ -26,6 +26,41 @@
 | **[Обзор бизнес-возможностей и применения](docs/BUSINESS_OVERVIEW_RU.md)** | Технические директора, Product Owners, тимлиды | Бизнес-выгода (ROI), FinTech/E-commerce/GDPR сценарии, матрица сравнения с Celery и Kafka |
 | **[Регламент поддержки и устранения аварий](docs/SUPPORT_RUNBOOK_RU.md)** | Инженеры L2/L3 поддержки, SRE, дежурные | 5-минутный онбординг, 30-секундный экспресс-чеклист диагностики, матрица инцидентов, рецепты исправления через UI и CLI |
 | **[Руководство оператора по веб-консоли](docs/WEB_CONSOLE_GUIDE_RU.md)** | Специалисты поддержки, операторы | Графики в реальном времени, снятие блокировок, Task Runner, разбор DLQ, формирование досье аварии |
+
+---
+
+## 🚀 Быстрый старт с Python Client SDK
+
+Установите клиентский SDK в любой ваш микросервис через `uv` или `pip`:
+
+```bash
+uv pip install -e .
+```
+
+Отправка задач и отслеживание статуса в 3 строчки асинхронного кода:
+
+```python
+import asyncio
+from src.client import TaskEngineClient
+
+async def main():
+    async with TaskEngineClient("http://localhost:8000") as client:
+        # Отправка задачи с автоматической дедупликацией и распределенным локом
+        res = await client.dispatch(
+            task_type="http_batch",
+            resource_id="tenant_spb_42",
+            items=[{"sku": "ITEM-101", "price": 490.0}],
+            parameters={"target_url": "https://api.internal/ingest"},
+            idempotency_key="unique-order-key-2026",
+        )
+        print(f"Поставлена задача UUID: {res.task_id}")
+
+        # Ожидание завершения выполнения
+        result = await client.wait_completion(str(res.task_id))
+        print(f"Статус: {result.status}, Обработано строк: {result.result.processed_count}")
+
+asyncio.run(main())
+```
 
 ---
 

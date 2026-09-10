@@ -7,7 +7,7 @@
 [![RabbitMQ](https://img.shields.io/badge/RabbitMQ-3.13-FF6600.svg)](https://www.rabbitmq.com/)
 [![Redis](https://img.shields.io/badge/Redis-7.0-DC382D.svg)](https://redis.io/)
 [![CI](https://github.com/georgeladd/async-task-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/georgeladd/async-task-engine/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/pytest-66%20passed-brightgreen.svg)](https://docs.pytest.org/)
+[![Tests](https://img.shields.io/badge/pytest-83%20passed-brightgreen.svg)](https://docs.pytest.org/)
 [![Console](https://img.shields.io/badge/Console-Dashboard-009688.svg)](http://localhost:8000/dashboard)
 [![Prometheus](https://img.shields.io/badge/Prometheus-Metrics-E6522C.svg)](http://localhost:8000/metrics)
 [![Architecture](https://img.shields.io/badge/docs-Architecture-blue.svg)](docs/ARCHITECTURE.md)
@@ -26,6 +26,41 @@ Production-grade asynchronous task execution engine designed for internal tools,
 | **[Business Overview & Use Cases](docs/BUSINESS_OVERVIEW.md)** | CTO, Product Owners, SRE Leads | Business ROI, FinTech/E-commerce/GDPR scenarios, Celery/Kafka comparison matrix |
 | **[Support Runbook & Incident Playbook](docs/SUPPORT_RUNBOOK.md)** | L2/L3 Support, Operations, SRE | 5-min onboarding, 30-sec triage checklist, incident matrix & copy-paste CLI fix commands |
 | **[Web Console Operator Guide](docs/WEB_CONSOLE_GUIDE.md)** | Support Engineers, Operators | Live charts, lock removal, self-service task runner, DLQ triage, incident dossier workflow |
+
+---
+
+## 🚀 Python Client SDK Quickstart
+
+Install the client SDK in your downstream services using `uv` or `pip`:
+
+```bash
+uv pip install -e .
+```
+
+Dispatch background workloads and monitor completion with 3 lines of asynchronous code:
+
+```python
+import asyncio
+from src.client import TaskEngineClient
+
+async def main():
+    async with TaskEngineClient("http://localhost:8000") as client:
+        # Submit task with automatic deduplication & distributed resource locking
+        res = await client.dispatch(
+            task_type="http_batch",
+            resource_id="tenant_spb_42",
+            items=[{"sku": "ITEM-101", "price": 490.0}],
+            parameters={"target_url": "https://api.internal/ingest"},
+            idempotency_key="unique-order-key-2026",
+        )
+        print(f"Enqueued Task UUID: {res.task_id}")
+
+        # Wait for terminal execution state
+        result = await client.wait_completion(str(res.task_id))
+        print(f"Status: {result.status}, Processed: {result.result.processed_count}")
+
+asyncio.run(main())
+```
 
 ---
 
