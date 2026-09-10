@@ -132,17 +132,17 @@ end
 
 ### 3.8. Operations & Support Web Console (`src/static/`, `src/ops_api.py`)
 - **Single-Page Architecture:** Built with Vanilla HTML5/CSS/JS and Chart.js served directly by FastAPI without Node.js build steps or extra containers
-- **Role & Access Security:** Operations endpoints (`/api/v1/ops/*`) require an operational API key via the `X-Ops-Token` header (`OPS_API_KEY`), safeguarding administrative unlock, replay, and incident escalation controls
-- **Single Source of Truth & Non-Blocking I/O:** Aggregates telemetry via `GET /api/v1/ops/overview` using O(1) Redis metric counters and non-blocking `SCAN` cursors (`scan_iter`), eliminating high-latency Redis `KEYS` operations
+- **Role & Access Security:** Operations endpoints (`/api/v1/ops/*`) require an operational API key verified via constant-time `hmac.compare_digest` against the `X-Ops-Token` header (`OPS_API_KEY`), safeguarding administrative unlock, replay, and incident escalation controls. The web console stores the token securely in browser `localStorage` and provides an in-app configuration modal
+- **Single Source of Truth & Self-Healing I/O:** Aggregates telemetry via `GET /api/v1/ops/overview` using O(1) Redis metric counters, active task tracking (`task:in_flight:*` keys with auto-expiry TTL), and non-blocking `SCAN` cursors (`scan_iter`), completely eliminating Redis `KEYS` overhead and preventing stuck active worker counts after unexpected process termination
 - **Active Lock Clearance:** Inspects active locks and issues atomic evictions via `POST /api/v1/ops/unlock`
-- **Two-Way DLQ Integration & Full Payload Replay:** Inspects failure stack traces and provides one-click `POST /api/v1/ops/dlq/replay`; automatically retrieves preserved original task payloads from Redis (`task:data:{task_id}`), resets retry attempts, decrements DLQ metrics, and re-enqueues back into the primary exchange
+- **Two-Way DLQ Integration & Atomic Payload Replay:** Inspects failure stack traces and provides one-click `POST /api/v1/ops/dlq/replay`; strictly publishes to the primary exchange *before* clearing retry counters and decrementing DLQ metrics, guaranteeing zero state drift if the broker is unreachable
 - **Structured Incident Dossier:** `POST /api/v1/ops/escalate` automatically collates execution traces, parameters, and queue states into standardized Markdown reports for L3/Dev bug trackers; accessible globally via header button or contextually from DLQ rows
 - **Dedicated Operator Guide:** See [Web Console Operator Guide](WEB_CONSOLE_GUIDE.md) for full interactive workflows, charts interpretation, and triage procedures
 
 ### 3.9. Idempotency & Deduplication Subsystem (`src/schemas.py`, `src/api.py`)
 - **The Problem:** In distributed environments, network blips, operator double-clicks, and client-side retries frequently trigger duplicate task dispatch. Without deduplication, this causes redundant database writes, resource waste, and billing discrepancies
 - **Dual Intake Support:** The API inspects the standard HTTP header `Idempotency-Key` as well as the JSON body field `idempotency_key`
-- **Atomic SET NX Claim:** The idempotency token is claimed via atomic `SET idempotency:{token} {task_id} NX EX 86400` *before* broker dispatch. If a duplicate or concurrent request arrives, `SET NX` fails immediately, completely eliminating TOCTOU race conditions:
+- **Atomic SET NX Claim:** The idempotency token is claimed via atomic `SET idempotency:{token} {task_id} NX EX 86400` *before* broker dispatch. If a duplicate or concurrent request arrives, `SET NX` fails immediately, completely eliminating TOCTOU race conditions across parallel threads and processes:
   - **Cache Hit (Duplicate Request):** The producer suppresses dispatch to RabbitMQ, retrieves current task status from Redis, logs the deduplication event, and returns a `TaskResponse` containing the original `task_id` with `is_duplicate: true`
   - **Cache Miss (New Request):** A new `TaskMessage` is generated and published to RabbitMQ. If broker dispatch fails, the key is rolled back to permit safe client retries
 - **Broker Protection:** Downstream RabbitMQ queues and background workers remain completely insulated from redundant network retries
@@ -153,16 +153,17 @@ end
 - **Async Context Isolation:** Python `contextvars.ContextVar` (`current_correlation_id`, `current_resource_id`) transparently attach tracing metadata to all logs emitted within worker coroutines without manual parameter passing
 - **Ingestion-Ready:** Tailored for effortless aggregation into Grafana Loki, Elasticsearch, or AWS CloudWatch without complex regex parsing rules
 
-### 3.11. Token Bucket Rate Limiting Subsystem (`src/rate_limiter.py`)
+### 3.11. Token Bucket Rate Limiting & Lock Backoff (`src/rate_limiter.py`, `src/worker.py`)
 - **Downstream Protection:** High-volume batch operations can inadvertently exhaust third-party API rate limits or starve relational database connection pools. The engine implements an in-process asynchronous Token Bucket limiter
 - **Monotonic Replenishment:** Tokens refill continuously according to `time.monotonic()` elapsed deltas up to maximum burst capacity
 - **Smooth Throttling:** If token quota is depleted, worker coroutines compute the exact deficit sleep time (`deficit / rate`), yielding the event loop and ensuring smooth cadence without busy-waiting
+- **Lock Contention Backoff:** If a worker encounters a locked resource, it backs off asynchronously before issuing `nack(requeue=True)`, preventing hot-loop worker spinning and queue thrashing
 - **Dynamic Configuration:** Paced via `RATE_LIMIT_PER_SECOND` in `.env`, allowing operational throttling adjustments without code redeployments
 
 ### 3.12. Hardened Webhook Notification System (`src/security.py`, `src/worker.py`)
 - **Event-Driven Resolution:** Replaces polling loops (`GET /tasks/{id}`) with automated HTTP POST callbacks pushed immediately upon task conclusion
 - **Multi-Status Events:** Emits `task.completed` with execution metrics (`processed_count`, `duration`) or `task.dead_lettered` on unrecoverable retry exhaustion
-- **SSRF Defense:** All destination URLs undergo pre-flight DNS resolution and IP address inspection via `src/security.py`; loopback (`127.0.0.0/8`, `::1`), private subnets (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`), and cloud metadata link-local endpoints (`169.254.169.254`) are strictly rejected
+- **SSRF Defense:** All destination URLs undergo non-blocking asynchronous DNS resolution via `asyncio.to_thread` and IP address inspection in `src/security.py`; loopback (`127.0.0.0/8`, `::1`), IPv4-mapped IPv6 (`::ffff:127.0.0.1`), private subnets (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`), and cloud metadata link-local endpoints (`169.254.169.254`) are strictly rejected
 - **HMAC-SHA256 Payload Signatures:** Every outgoing delivery attaches an `X-Hub-Signature-256` header calculated with `WEBHOOK_SIGNING_SECRET`, allowing receiving webhooks to verify authenticity and tamper-evidence
 - **Fault-Tolerant Delivery:** Webhook dispatches are bounded by strict 5-second HTTP client timeouts and isolated exception handling; destination outages will never crash worker threads or prevent message acknowledgments
 
