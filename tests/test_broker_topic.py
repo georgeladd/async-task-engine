@@ -80,8 +80,31 @@ async def test_broker_declare_worker_queue_binds_to_topic() -> None:
 
 
 @pytest.mark.asyncio
-async def test_broker_publish_task_resolves_topic_routing_key() -> None:
-    """Verifies that publish_task computes tasks.<task_type> routing key for topic exchange."""
+async def test_broker_publish_task_resolves_general_routing_key_by_default() -> None:
+    """Verifies that uncategorized tasks default to tasks.general.<type> routing key."""
+    broker = MessageBroker()
+    mock_channel = AsyncMock()
+    mock_topic_exchange = AsyncMock()
+    mock_channel.get_exchange.return_value = mock_topic_exchange
+    broker.channel = mock_channel
+
+    task = TaskMessage(
+        task_id=uuid4(),
+        task_type="inventory_sync",
+        resource_id="doc_101",
+        priority=TaskPriority.NORMAL,
+    )
+
+    await broker.publish_task(task)
+
+    assert mock_topic_exchange.publish.call_count == 1
+    call_kwargs = mock_topic_exchange.publish.call_args[1]
+    assert call_kwargs["routing_key"] == "tasks.general.inventory_sync"
+
+
+@pytest.mark.asyncio
+async def test_broker_publish_task_resolves_categorized_topic_routing_key() -> None:
+    """Verifies that categorized tasks preserve category in tasks.<category>.<type> routing key."""
     broker = MessageBroker()
     mock_channel = AsyncMock()
     mock_topic_exchange = AsyncMock()
@@ -100,6 +123,40 @@ async def test_broker_publish_task_resolves_topic_routing_key() -> None:
     assert mock_topic_exchange.publish.call_count == 1
     call_kwargs = mock_topic_exchange.publish.call_args[1]
     assert call_kwargs["routing_key"] == "tasks.heavy.pdf_render"
+
+
+def test_amqp_topic_routing_isolation_matrix() -> None:
+    """Verifies that general and heavy queues do not cross-deliver messages."""
+    def matches_amqp_pattern(pattern: str, key: str) -> bool:
+        p_parts = pattern.split(".")
+        k_parts = key.split(".")
+        if len(p_parts) != len(k_parts):
+            return False
+        for p, k in zip(p_parts, k_parts, strict=False):
+            if p == "*":
+                continue
+            if p != k:
+                return False
+        return True
+
+    general_binding = "tasks.general.*"
+    heavy_binding = "tasks.heavy.*"
+
+    general_key = "tasks.general.http_batch"
+    heavy_key = "tasks.heavy.pdf_render"
+    unrouted_key = "tasks.unknown.weird"
+
+    # General queue receives general key, rejects heavy key
+    assert matches_amqp_pattern(general_binding, general_key) is True
+    assert matches_amqp_pattern(general_binding, heavy_key) is False
+
+    # Heavy queue receives heavy key, rejects general key
+    assert matches_amqp_pattern(heavy_binding, heavy_key) is True
+    assert matches_amqp_pattern(heavy_binding, general_key) is False
+
+    # Unrouted key matches neither and triggers Alternate Exchange
+    assert matches_amqp_pattern(general_binding, unrouted_key) is False
+    assert matches_amqp_pattern(heavy_binding, unrouted_key) is False
 
 
 def test_task_worker_custom_queue_configuration() -> None:

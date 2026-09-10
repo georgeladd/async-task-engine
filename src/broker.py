@@ -56,7 +56,7 @@ class MessageBroker:
     async def declare_worker_queue(
         self,
         queue_name: str,
-        routing_key: str = "tasks.#",
+        routing_key: str = "tasks.general.*",
     ) -> AbstractQueue:
         """Dynamically declares and binds a worker queue to the topic exchange.
 
@@ -175,10 +175,15 @@ class MessageBroker:
         if not self.channel:
             raise RuntimeError("Broker connection is not initialized. Call connect() first.")
 
-        # Resolve topic routing key
+        # Resolve topic routing key (default tasks.general.<type> unless categorized with dot)
         if not routing_key:
             category = task.task_type
-            routing_key = category if category.startswith("tasks.") else f"tasks.{category}"
+            if category.startswith("tasks."):
+                routing_key = category
+            elif "." in category:
+                routing_key = f"tasks.{category}"
+            else:
+                routing_key = f"tasks.general.{category}"
 
         try:
             exchange = await self.channel.get_exchange("tasks.topic")

@@ -54,7 +54,7 @@ class Settings(BaseSettings):
     webhook_signing_secret: str = "webhook-dev-secret"
     allow_local_webhooks: bool = False
     worker_queue_name: str = "tasks_primary"
-    worker_routing_key: str = "tasks.#"
+    worker_routing_key: str = "tasks.general.*"
 
     @model_validator(mode="after")
     def validate_production_security(self) -> "Settings":
