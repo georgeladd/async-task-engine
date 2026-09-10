@@ -53,6 +53,7 @@ services:
     command: ["python", "-m", "src.worker"]
     volumes:
       - ./src:/app/src
+      - ./data:/app/data
     environment:
       - RABBITMQ_HOST=rabbitmq
       - RABBITMQ_PORT=5672
@@ -61,6 +62,8 @@ services:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - BATCH_CHUNK_SIZE=50
+      - WORKER_QUEUE_NAME=tasks_primary
+      - WORKER_ROUTING_KEY=tasks.general.*
       - WEBHOOK_SIGNING_SECRET=${WEBHOOK_SIGNING_SECRET:-webhook-dev-secret}
     depends_on:
       rabbitmq:
