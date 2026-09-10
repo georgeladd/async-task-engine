@@ -1,0 +1,388 @@
+"""Operations and support API router for dashboard telemetry and incident management."""
+
+import json
+import logging
+from datetime import datetime, timezone
+from typing import Any
+from uuid import UUID, uuid4
+
+import redis.asyncio as aioredis
+from fastapi import APIRouter, HTTPException, status
+from pydantic import BaseModel, Field
+from redis.asyncio import Redis
+from redis.exceptions import RedisError
+
+from src.config import settings
+from src.metrics import (
+    ACTIVE_WORKER_TASKS,
+    DEAD_LETTER_TASKS_TOTAL,
+    ITEMS_PROCESSED_TOTAL,
+    TASK_DURATION_SECONDS,
+    TASKS_COMPLETED_TOTAL,
+    TASKS_SUBMITTED_TOTAL,
+)
+from src.schemas import TaskMessage, TaskPriority, TaskStatus
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/api/v1/ops", tags=["Operations"])
+
+
+class OpsOverview(BaseModel):
+    """Aggregated operational health and metrics overview."""
+
+    system_status: str = Field(default="healthy", description="Overall health state")
+    queue_primary_depth: int = Field(default=0, description="Tasks awaiting execution in primary queue")
+    queue_dlq_depth: int = Field(default=0, description="Tasks currently inside Dead-Letter Queue")
+    active_workers: int = Field(default=0, description="Active tasks executing right now")
+    tasks_submitted_total: int = Field(default=0, description="Total tasks accepted by API")
+    tasks_completed_total: int = Field(default=0, description="Total successfully finished tasks")
+    tasks_dead_letter_total: int = Field(default=0, description="Total tasks routed to DLQ")
+    items_processed_total: int = Field(default=0, description="Total individual data records processed")
+    avg_duration_seconds: float = Field(default=0.0, description="Average batch processing time")
+    active_locks_count: int = Field(default=0, description="Active distributed resource locks count")
+
+
+class LockItem(BaseModel):
+    """Information about an active Redis distributed lock."""
+
+    resource_id: str = Field(..., description="Target protected resource key")
+    lock_key: str = Field(..., description="Full Redis lock key")
+    ttl_remaining: int = Field(..., description="Remaining seconds before auto-expiry")
+    owner_token: str = Field(..., description="Unique ownership token")
+
+
+class UnlockRequest(BaseModel):
+    """Request schema for manually releasing a distributed lock."""
+
+    resource_id: str = Field(..., description="Target resource key to release")
+
+
+class DLQItem(BaseModel):
+    """Dead-Letter Queue incident task item for inspection."""
+
+    task_id: str = Field(..., description="Unique task identifier")
+    task_type: str = Field(..., description="Category of the failing task")
+    resource_id: str = Field(..., description="Guarded resource key")
+    status: str = Field(..., description="Task lifecycle status")
+    error_reason: str = Field(..., description="Diagnostic error traceback")
+    updated_at: str = Field(..., description="Timestamp of dead-letter routing")
+
+
+class DLQReplayRequest(BaseModel):
+    """Request schema for replaying a failed task from DLQ back into primary queue."""
+
+    task_id: str = Field(..., description="Task UUID to requeue")
+
+
+class EscalateRequest(BaseModel):
+    """Request schema for generating an incident package for L3/Development."""
+
+    task_id: str = Field(..., description="Failing task UUID")
+    operator_comment: str | None = Field(default=None, description="Observations from on-call engineer")
+
+
+class EscalateResponse(BaseModel):
+    """Generated incident report and dossier response."""
+
+    incident_id: str = Field(..., description="Unique incident identifier")
+    status: str = Field(default="escalated", description="Incident triage status")
+    markdown_dossier: str = Field(..., description="Formatted Markdown dossier for Jira/Slack")
+
+
+def _get_redis_client() -> Redis:
+    """Creates an asynchronous Redis connection instance.
+
+    Returns:
+        Redis client instance.
+    """
+    return aioredis.from_url(
+        settings.redis_uri,
+        encoding="utf-8",
+        decode_responses=True,
+    )
+
+
+@router.get("/overview", response_model=OpsOverview)
+async def get_ops_overview() -> OpsOverview:
+    """Aggregates real-time health and telemetry metrics across components.
+
+    Collects data from Prometheus instruments and Redis state cache.
+
+    Returns:
+        OpsOverview schema with system counters and status.
+    """
+    redis = _get_redis_client()
+    active_locks_count: int = 0
+    dead_letter_count: int = 0
+
+    try:
+        lock_keys = await redis.keys("lock:resource:*")
+        active_locks_count = len(lock_keys)
+
+        # Collect tasks marked as dead_lettered
+        status_keys = await redis.keys("task:status:*")
+        for sk in status_keys:
+            val = await redis.get(sk)
+            if val == TaskStatus.DEAD_LETTERED.value:
+                dead_letter_count += 1
+    except (RedisError, OSError) as err:
+        logger.warning(f"Error querying Redis state during overview aggregation: {err}")
+    finally:
+        await redis.close()
+
+    # Prometheus telemetry calculations
+    active_workers: int = int(ACTIVE_WORKER_TASKS._value.get())
+
+    # Aggregate metric samples
+    submitted: int = int(sum(sample.value for sample in TASKS_SUBMITTED_TOTAL.collect()[0].samples))
+    completed: int = int(sum(sample.value for sample in TASKS_COMPLETED_TOTAL.collect()[0].samples))
+    dlq_metric: int = int(sum(sample.value for sample in DEAD_LETTER_TASKS_TOTAL.collect()[0].samples))
+    items_metric: int = int(sum(sample.value for sample in ITEMS_PROCESSED_TOTAL.collect()[0].samples))
+
+    # Duration average
+    duration_samples = TASK_DURATION_SECONDS.collect()[0].samples
+    duration_sum: float = 0.0
+    duration_count: float = 0.0
+    for s in duration_samples:
+        if s.name.endswith("_sum"):
+            duration_sum += s.value
+        elif s.name.endswith("_count"):
+            duration_count += s.value
+
+    avg_duration: float = round(duration_sum / max(1.0, duration_count), 3) if duration_count > 0 else 0.0
+    sys_status: str = "degraded" if dead_letter_count > 0 or dlq_metric > 0 else "healthy"
+
+    overview = OpsOverview(
+        system_status=sys_status,
+        queue_primary_depth=max(0, submitted - completed - dlq_metric),
+        queue_dlq_depth=max(dead_letter_count, dlq_metric),
+        active_workers=active_workers,
+        tasks_submitted_total=submitted,
+        tasks_completed_total=completed,
+        tasks_dead_letter_total=max(dead_letter_count, dlq_metric),
+        items_processed_total=items_metric,
+        avg_duration_seconds=avg_duration,
+        active_locks_count=active_locks_count,
+    )
+    return overview
+
+
+@router.get("/locks", response_model=list[LockItem])
+async def list_active_locks() -> list[LockItem]:
+    """Retrieves all active Redis distributed resource locks.
+
+    Returns:
+        List of active LockItem instances with remaining TTL.
+    """
+    redis = _get_redis_client()
+    locks: list[LockItem] = []
+
+    try:
+        keys = await redis.keys("lock:resource:*")
+        for key in keys:
+            ttl = await redis.ttl(key)
+            token = await redis.get(key)
+            resource_name = key.replace("lock:resource:", "")
+            locks.append(
+                LockItem(
+                    resource_id=resource_name,
+                    lock_key=key,
+                    ttl_remaining=max(0, ttl),
+                    owner_token=str(token or "unknown"),
+                )
+            )
+    except Exception as err:
+        logger.error(f"Failed to query distributed locks: {err}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Lock retrieval failed: {err}",
+        ) from err
+    finally:
+        await redis.close()
+
+    return locks
+
+
+@router.post("/unlock")
+async def force_unlock_resource(request: UnlockRequest) -> dict[str, Any]:
+    """Manually releases an orphaned distributed lock key in Redis.
+
+    Args:
+        request: Target resource identifier.
+
+    Returns:
+        Status summary confirming unlock action.
+    """
+    redis = _get_redis_client()
+    lock_key = f"lock:resource:{request.resource_id}"
+    response: dict[str, Any] = {"resource_id": request.resource_id}
+
+    try:
+        exists = await redis.exists(lock_key)
+        if not exists:
+            response["status"] = "not_locked"
+            response["message"] = f"Resource '{request.resource_id}' was not locked"
+        else:
+            ttl = await redis.ttl(lock_key)
+            await redis.delete(lock_key)
+            response["status"] = "unlocked"
+            response["message"] = f"Successfully released lock for '{request.resource_id}' (evicted {ttl}s TTL)"
+    except Exception as err:
+        logger.error(f"Failed to force-unlock resource {request.resource_id}: {err}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Force unlock failed: {err}",
+        ) from err
+    finally:
+        await redis.close()
+
+    return response
+
+
+@router.get("/dlq", response_model=list[DLQItem])
+async def list_dead_letter_tasks() -> list[DLQItem]:
+    """Retrieves list of tasks that exhausted retries and were routed to Dead-Letter Queue.
+
+    Returns:
+        List of DLQItem records with failure reasons.
+    """
+    redis = _get_redis_client()
+    dlq_items: list[DLQItem] = []
+
+    try:
+        status_keys = await redis.keys("task:status:*")
+        for sk in status_keys:
+            state = await redis.get(sk)
+            if state == TaskStatus.DEAD_LETTERED.value:
+                task_id = sk.replace("task:status:", "")
+                result_key = f"task:result:{task_id}"
+                raw_result = await redis.get(result_key)
+                error_msg: str = "Max retry attempts exhausted"
+                if raw_result:
+                    try:
+                        parsed = json.loads(raw_result)
+                        if parsed.get("error_message"):
+                            error_msg = parsed.get("error_message")
+                    except (json.JSONDecodeError, TypeError):
+                        error_msg = str(raw_result)
+
+                dlq_items.append(
+                    DLQItem(
+                        task_id=task_id,
+                        task_type="batch_operation",
+                        resource_id=f"res_{task_id[:8]}",
+                        status=TaskStatus.DEAD_LETTERED.value,
+                        error_reason=error_msg,
+                        updated_at=datetime.now(timezone.utc).isoformat(),
+                    )
+                )
+    except (RedisError, OSError) as err:
+        logger.error(f"Failed to list dead-letter tasks: {err}")
+    finally:
+        await redis.close()
+
+    return dlq_items
+
+
+@router.post("/dlq/replay")
+async def replay_dead_letter_task(request: DLQReplayRequest) -> dict[str, Any]:
+    """Requeues a failed task from DLQ back into the primary queue for execution.
+
+    Args:
+        request: Target task UUID to replay.
+
+    Returns:
+        Confirmation dictionary with re-enqueued status.
+    """
+    from src.api import broker
+
+    redis = _get_redis_client()
+    status_key = f"task:status:{request.task_id}"
+
+    try:
+        # Re-set status to pending
+        await redis.set(status_key, TaskStatus.PENDING.value, ex=86400)
+
+        # Re-dispatch message to primary exchange
+        task = TaskMessage(
+            task_id=UUID(request.task_id),
+            task_type="replayed_operation",
+            resource_id=f"replay_{request.task_id[:8]}",
+            priority=TaskPriority.HIGH,
+            attempts=0,
+        )
+        await broker.publish_task(task)
+
+        logger.info(f"Task {request.task_id} replayed from DLQ into primary queue")
+        result = {
+            "task_id": request.task_id,
+            "status": "requeued",
+            "message": "Task re-enqueued into primary queue with high priority",
+        }
+    except Exception as err:
+        logger.error(f"Failed to replay task {request.task_id}: {err}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Task replay failed: {err}",
+        ) from err
+    finally:
+        await redis.close()
+
+    return result
+
+
+@router.post("/escalate", response_model=EscalateResponse)
+async def escalate_task_incident(request: EscalateRequest) -> EscalateResponse:
+    """Compiles an incident dossier with runtime context and diagnostics for L3/Dev escalations.
+
+    Args:
+        request: Failing task UUID and optional operator notes.
+
+    Returns:
+        EscalateResponse containing unique incident ID and Markdown report.
+    """
+    redis = _get_redis_client()
+    incident_id: str = f"INC-{str(uuid4())[:8].upper()}"
+    result_key = f"task:result:{request.task_id}"
+
+    error_detail: str = "Unknown root cause"
+    try:
+        raw_result = await redis.get(result_key)
+        if raw_result:
+            error_detail = raw_result
+    finally:
+        await redis.close()
+
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    operator_notes = request.operator_comment or "No additional notes provided by operator"
+
+    dossier: str = f"""### Incident Report: {incident_id}
+**Service:** {settings.app_name}
+**Timestamp:** {timestamp}
+**Target Task UUID:** `{request.task_id}`
+**Status:** `CRITICAL / DEAD-LETTERED`
+
+#### Diagnostic Context
+- **Environment:** `{settings.environment}`
+- **RabbitMQ Main Queue:** `{settings.rabbitmq_main_queue}`
+- **Dead-Letter Queue:** `{settings.rabbitmq_dlq_queue}`
+- **Error Traceback:**
+```text
+{error_detail}
+```
+
+#### Operator Observations (L2 Support)
+> {operator_notes}
+
+#### Recommended Immediate Actions (L3 / Dev)
+1. Inspect payload format against active database schemas
+2. Verify downstream database connection pool saturation
+3. After patch deployment, execute replay via `POST /api/v1/ops/dlq/replay`
+"""
+
+    return EscalateResponse(
+        incident_id=incident_id,
+        status="escalated",
+        markdown_dossier=dossier.strip(),
+    )

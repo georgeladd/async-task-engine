@@ -3,16 +3,20 @@
 import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 from uuid import UUID
 
 import redis.asyncio as aioredis
 from fastapi import FastAPI, HTTPException, Response, status
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from redis.asyncio import Redis
 
 from src.broker import MessageBroker
 from src.config import settings
 from src.metrics import TASKS_SUBMITTED_TOTAL, get_prometheus_metrics
+from src.ops_api import router as ops_router
 from src.schemas import TaskCreateRequest, TaskMessage, TaskResponse, TaskStatus
 
 logger = logging.getLogger(__name__)
@@ -53,6 +57,26 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+
+# Mount operations router
+app.include_router(ops_router)
+
+# Mount static web console assets
+static_dir = Path(__file__).parent / "static"
+if static_dir.exists():
+    app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
+
+@app.get("/dashboard", tags=["Dashboard"])
+async def dashboard_view() -> FileResponse:
+    """Serves the Operations & Support Web Console HTML application."""
+    index_file = Path(__file__).parent / "static" / "index.html"
+    if not index_file.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Dashboard frontend assets not found",
+        )
+    return FileResponse(str(index_file))
 
 
 @app.get("/health", status_code=status.HTTP_200_OK, tags=["Health"])

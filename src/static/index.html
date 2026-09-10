@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Async Task Engine | Operations & Support Console</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <!-- Chart.js for operational telemetry graphs -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <div class="app-container">
+    <!-- Top Navigation & System Health Bar -->
+    <header class="top-nav">
+      <div class="brand">
+        <div class="brand-icon">⚡</div>
+        <div class="brand-text">
+          <h1>Async Task Engine</h1>
+          <span class="badge-tag">Operations Console</span>
+        </div>
+      </div>
+
+      <div class="system-status-bar">
+        <div class="status-indicator" id="indicator-api">
+          <span class="dot pulse-green"></span>
+          <span class="label">API: <strong id="val-api-status">OK</strong></span>
+        </div>
+        <div class="status-indicator" id="indicator-broker">
+          <span class="dot pulse-green"></span>
+          <span class="label">RabbitMQ: <strong id="val-broker-status">Active</strong></span>
+        </div>
+        <div class="status-indicator" id="indicator-redis">
+          <span class="dot pulse-green"></span>
+          <span class="label">Redis: <strong id="val-redis-status">Online</strong></span>
+        </div>
+        <div class="status-indicator" id="indicator-workers">
+          <span class="dot pulse-green"></span>
+          <span class="label">Workers: <strong id="val-active-workers">0</strong> in-flight</span>
+        </div>
+      </div>
+
+      <div class="controls-bar">
+        <label for="auto-refresh-select">Refresh:</label>
+        <select id="auto-refresh-select" class="form-select-sm">
+          <option value="3000">Every 3s</option>
+          <option value="5000" selected>Every 5s</option>
+          <option value="10000">Every 10s</option>
+          <option value="0">Manual</option>
+        </select>
+        <button id="btn-refresh" class="btn btn-outline" title="Refresh metrics now">⟳ Refresh</button>
+      </div>
+    </header>
+
+    <!-- Main Dashboard Body -->
+    <main class="dashboard-content">
+      <!-- 4 KPI Summary Cards -->
+      <section class="kpi-grid">
+        <div class="kpi-card" id="card-queue-depth">
+          <div class="kpi-icon icon-blue">📥</div>
+          <div class="kpi-details">
+            <span class="kpi-title">Queue Backlog</span>
+            <div class="kpi-value" id="kpi-queue-depth">0</div>
+            <span class="kpi-sub">Awaiting worker processing</span>
+          </div>
+        </div>
+
+        <div class="kpi-card" id="card-active-workers">
+          <div class="kpi-icon icon-purple">⚙️</div>
+          <div class="kpi-details">
+            <span class="kpi-title">In-Flight Tasks</span>
+            <div class="kpi-value" id="kpi-in-flight">0</div>
+            <span class="kpi-sub">Currently under Redis lock</span>
+          </div>
+        </div>
+
+        <div class="kpi-card" id="card-total-completed">
+          <div class="kpi-icon icon-green">✅</div>
+          <div class="kpi-details">
+            <span class="kpi-title">Completed Tasks</span>
+            <div class="kpi-value" id="kpi-completed">0</div>
+            <span class="kpi-sub" id="kpi-items-count">0 items processed</span>
+          </div>
+        </div>
+
+        <div class="kpi-card" id="card-dlq-alerts">
+          <div class="kpi-icon icon-red">🚨</div>
+          <div class="kpi-details">
+            <span class="kpi-title">Dead-Letter Queue</span>
+            <div class="kpi-value text-red" id="kpi-dlq">0</div>
+            <span class="kpi-sub">Failed after 3 retries</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Operational Telemetry Charts -->
+      <section class="charts-grid">
+        <div class="card chart-card">
+          <div class="card-header">
+            <h3>Throughput & Queue Trends</h3>
+            <span class="card-badge">Real-Time</span>
+          </div>
+          <div class="chart-wrapper">
+            <canvas id="throughputChart"></canvas>
+          </div>
+        </div>
+
+        <div class="card chart-card">
+          <div class="card-header">
+            <h3>Batch Processing Duration</h3>
+            <span class="card-badge">Average: <span id="val-avg-duration">0.0s</span></span>
+          </div>
+          <div class="chart-wrapper">
+            <canvas id="durationChart"></canvas>
+          </div>
+        </div>
+      </section>
+
+      <!-- Active Locks & Self-Service Runner Grid -->
+      <section class="ops-split-grid">
+        <!-- Active Distributed Locks Panel -->
+        <div class="card locks-card">
+          <div class="card-header">
+            <h3>Active Distributed Locks (Redis)</h3>
+            <span class="badge-counter" id="badge-locks-count">0 active</span>
+          </div>
+          <p class="section-desc">Guarding resources against concurrent write collisions. Operators can release stuck locks:</p>
+          <div class="table-responsive">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Resource ID</th>
+                  <th>TTL Remaining</th>
+                  <th>Owner Token</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="locks-table-body">
+                <tr>
+                  <td colspan="4" class="text-center empty-state">No resources currently locked</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Self-Service Operational Task Dispatcher -->
+        <div class="card runner-card">
+          <div class="card-header">
+            <h3>Self-Service Task Runner</h3>
+            <span class="card-badge">Support Triage</span>
+          </div>
+          <p class="section-desc">Trigger standard maintenance and remediation jobs directly from the console:</p>
+          <form id="form-dispatch-task" class="runner-form">
+            <div class="form-group">
+              <label for="task-type-select">Task Type:</label>
+              <select id="task-type-select" class="form-input">
+                <option value="data_cleanup">data_cleanup (Support Cleanup)</option>
+                <option value="cache_warmup">cache_warmup (Cache Refresh)</option>
+                <option value="inventory_sync">inventory_sync (Resource Sync)</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="resource-id-input">Target Resource Key:</label>
+              <input type="text" id="resource-id-input" class="form-input" placeholder="e.g. account_tenant_109" required>
+            </div>
+            <div class="form-row">
+              <div class="form-group flex-1">
+                <label for="priority-select">Priority:</label>
+                <select id="priority-select" class="form-input">
+                  <option value="normal">Normal</option>
+                  <option value="high">High</option>
+                  <option value="critical">Critical</option>
+                  <option value="low">Low</option>
+                </select>
+              </div>
+              <div class="form-group flex-1">
+                <label for="items-count-input">Batch Items:</label>
+                <input type="number" id="items-count-input" class="form-input" value="150" min="1" max="5000">
+              </div>
+            </div>
+            <button type="submit" class="btn btn-primary" id="btn-dispatch">🚀 Dispatch Task</button>
+          </form>
+          <div id="dispatch-feedback" class="dispatch-feedback" style="display: none;"></div>
+        </div>
+      </section>
+
+      <!-- Dead-Letter Queue Incident Panel -->
+      <section class="card dlq-card">
+        <div class="card-header">
+          <div class="title-with-badge">
+            <h3>Dead-Letter Queue Triage & Recovery</h3>
+            <span class="badge-alert" id="badge-dlq-count">0 tasks</span>
+          </div>
+          <button id="btn-refresh-dlq" class="btn btn-sm btn-outline">Refresh DLQ</button>
+        </div>
+        <p class="section-desc">Tasks that failed 3 execution retries. Inspect failure causes, replay to primary queue, or escalate to engineering:</p>
+        <div class="table-responsive">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Task UUID</th>
+                <th>Category</th>
+                <th>Failure Root Cause</th>
+                <th>Recorded At</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="dlq-table-body">
+              <tr>
+                <td colspan="5" class="text-center empty-state">Dead-Letter Queue is empty. All queues healthy</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <!-- Incident Escalation Modal Dialog -->
+    <div id="escalation-modal" class="modal-overlay" style="display: none;">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3 id="modal-title">Escalate Task Incident to L3 / Development</h3>
+          <button id="btn-close-modal" class="modal-close">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p>This will compile an automated Incident Dossier with complete runtime context, queue logs, and database parameters for bug tracking:</p>
+          <div class="form-group">
+            <label for="operator-notes">Operator Observations (What was the user or system doing?):</label>
+            <textarea id="operator-notes" class="form-textarea" rows="3" placeholder="e.g. Occurred after customer initiated batch export with custom filters"></textarea>
+          </div>
+          <div id="dossier-preview-wrapper" style="display: none;">
+            <label>Generated Incident Dossier:</label>
+            <pre id="dossier-content" class="code-box"></pre>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button id="btn-generate-dossier" class="btn btn-primary">Generate Incident Dossier</button>
+          <button id="btn-copy-dossier" class="btn btn-success" style="display: none;">📋 Copy Dossier to Clipboard</button>
+          <button id="btn-cancel-modal" class="btn btn-outline">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Notification Toast Container -->
+    <div id="toast-container" class="toast-container"></div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
