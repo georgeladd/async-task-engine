@@ -277,15 +277,17 @@ Dedicated worker containers are assigned higher compute and memory quotas:
   worker-heavy:
     build: .
     container_name: async-engine-worker-heavy
-    command: ["python", "-m", "src.worker_heavy"]
+    command: ["python", "-m", "src.worker"]
     deploy:
       resources:
         limits:
           cpus: "2.0"
           memory: 4096M
     environment:
+      - RABBITMQ_HOST=rabbitmq
+      - REDIS_HOST=redis
       - WORKER_QUEUE_NAME=tasks_heavy
-      - ROUTING_KEY=tasks.heavy.*
+      - WORKER_ROUTING_KEY=tasks.heavy.*
 ```
 
 ### 5.3. Unrouted Message Protection (Alternate Exchange Fallback)

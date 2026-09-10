@@ -83,13 +83,13 @@ sequenceDiagram
 ### 3.1. Producer Layer (`src/api.py`)
 - Built on **FastAPI** with native asynchronous request handling
 - Validates task payload constraints via **Pydantic v2** (`src/schemas.py`)
-- Emits tasks into RabbitMQ direct exchange using `aio-pika` connection pooling
+- Emits tasks into RabbitMQ Topic exchange (`tasks.topic`) with automatic categorized routing keys (`tasks.general.<type>` or `tasks.<category>.<type>`)
 - Fast response SLA: request acceptance typically takes under 15ms
 
 ### 3.2. Queue Broker & Topology (`src/broker.py`)
-- **Message Exchange:** Supports `Direct` and `Topic` schemes (`tasks_exchange`) with routing keys derived from task categories (e.g. `tasks.general.*`, `tasks.heavy.*`)
-- **Primary & Dedicated Queues:** Configured with priority queueing `x-max-priority=10` (levels `low`, `normal`, `high`, `critical`) and `x-dead-letter-exchange=tasks.dlx`. Supports dynamic consumer-driven queue declaration without restarting core infrastructure
-- **Alternate Exchange Fallback:** Automatically intercepts unrouted task messages if a dedicated worker queue is not yet provisioned, eliminating message loss
+- **Message Exchange:** Native Topic exchange (`tasks.topic`) with Alternate Exchange fallback (`tasks.ae` -> `tasks_unrouted`) and backward-compatible Direct scheme (`tasks.direct`)
+- **Primary & Dedicated Queues:** Primary queue `tasks_primary` binds to `tasks.general.*`, while dedicated on-demand worker pools declare and bind custom categories (e.g. `tasks_heavy` to `tasks.heavy.*`) with priority queueing `x-max-priority=10`
+- **Alternate Exchange Fallback (`tasks.ae` -> `tasks_unrouted`):** Automatically intercepts unrouted task messages when a dedicated worker queue is not yet provisioned, eliminating message loss
 - **Dead-Letter Exchange (`tasks.dlx`) & Queue (`tasks_dead_letter`):** Catches unprocessable, malformed, or permanently failing tasks for manual inspection and alerts
 
 ### 3.3. Distributed Lock Manager (`src/redis_lock.py`)
