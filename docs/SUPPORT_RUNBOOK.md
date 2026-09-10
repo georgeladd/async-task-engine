@@ -1,5 +1,7 @@
 # Technical Support Runbook & Operations Playbook
 
+🌐 **[English](SUPPORT_RUNBOOK.md)** • **[Русский](SUPPORT_RUNBOOK_RU.md)**
+
 Welcome to the operational runbook for **Async Task Engine**. This document is designed for L2/L3 Technical Support and Operations Engineers to diagnose incidents rapidly, understand system behavior, and resolve production failures with minimal MTTR (Mean Time to Resolution)
 
 ---
