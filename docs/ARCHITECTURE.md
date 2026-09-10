@@ -87,8 +87,9 @@ sequenceDiagram
 - Fast response SLA: request acceptance typically takes under 15ms
 
 ### 3.2. Queue Broker & Topology (`src/broker.py`)
-- **Direct Exchange (`tasks.direct`):** Routes incoming tasks by routing key `task.process`
-- **Primary Queue (`tasks_primary`):** Configured with `x-max-priority=10` (supports priority levels `low`, `normal`, `high`, `critical`) and `x-dead-letter-exchange=tasks.dlx`
+- **Message Exchange:** Supports `Direct` and `Topic` schemes (`tasks_exchange`) with routing keys derived from task categories (e.g. `tasks.general.*`, `tasks.heavy.*`)
+- **Primary & Dedicated Queues:** Configured with priority queueing `x-max-priority=10` (levels `low`, `normal`, `high`, `critical`) and `x-dead-letter-exchange=tasks.dlx`. Supports dynamic consumer-driven queue declaration without restarting core infrastructure
+- **Alternate Exchange Fallback:** Automatically intercepts unrouted task messages if a dedicated worker queue is not yet provisioned, eliminating message loss
 - **Dead-Letter Exchange (`tasks.dlx`) & Queue (`tasks_dead_letter`):** Catches unprocessable, malformed, or permanently failing tasks for manual inspection and alerts
 
 ### 3.3. Distributed Lock Manager (`src/redis_lock.py`)
@@ -184,3 +185,4 @@ end
 | **Callback Delivery** | Out-of-Band Non-blocking Webhooks | Client-side polling only | Webhooks dramatically reduce unnecessary GET traffic on the API cluster during prolonged batch executions |
 | **Batch Streaming** | Memory-Safe Generator Iterators | Loading full arrays, Pandas DataFrames | Generators ensure predictable memory utilization regardless of payload size |
 | **Task Requeuing** | NACK with Requeue & Retry Limits | Infinite immediate retries | Prevents "poison pill" messages from crashing worker loops indefinitely |
+| **Task Routing Topology** | Native Topic Exchange + Consumer-Driven Bindings | Content-Based Python Dispatcher Worker | RabbitMQ routes tasks at the Erlang kernel level in microseconds without dual serialization, network hops, or a single point of failure (SPOF) in an application dispatcher process |
