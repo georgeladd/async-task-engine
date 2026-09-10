@@ -295,11 +295,23 @@ async def list_dead_letter_tasks() -> list[DLQItem]:
                     except (json.JSONDecodeError, TypeError):
                         error_msg = str(raw_result)
 
+                # Attempt to extract original task type and resource from preserved payload
+                task_data_raw = await redis.get(f"task:data:{task_id}")
+                task_type_val = "batch_operation"
+                resource_id_val = f"res_{task_id[:8]}"
+                if task_data_raw:
+                    try:
+                        parsed_data = json.loads(task_data_raw)
+                        task_type_val = parsed_data.get("task_type", task_type_val)
+                        resource_id_val = parsed_data.get("resource_id", resource_id_val)
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+
                 dlq_items.append(
                     DLQItem(
                         task_id=task_id,
-                        task_type="batch_operation",
-                        resource_id=f"res_{task_id[:8]}",
+                        task_type=task_type_val,
+                        resource_id=resource_id_val,
                         status=TaskStatus.DEAD_LETTERED.value,
                         error_reason=error_msg,
                         updated_at=datetime.now(timezone.utc).isoformat(),
@@ -329,17 +341,34 @@ async def replay_dead_letter_task(request: DLQReplayRequest) -> dict[str, Any]:
     status_key = f"task:status:{request.task_id}"
 
     try:
-        # Re-set status to pending
-        await redis.set(status_key, TaskStatus.PENDING.value, ex=86400)
+        # Read preserved original task payload if available
+        task_data_raw = await redis.get(f"task:data:{request.task_id}")
+        if task_data_raw:
+            try:
+                task = TaskMessage.model_validate_json(task_data_raw)
+                task.priority = TaskPriority.HIGH
+                task.attempts = 0
+            except (ValueError, TypeError, KeyError) as parse_err:
+                logger.warning(f"Could not parse preserved task data for {request.task_id}: {parse_err}")
+                task = TaskMessage(
+                    task_id=UUID(request.task_id),
+                    task_type="replayed_operation",
+                    resource_id=f"replay_{request.task_id[:8]}",
+                    priority=TaskPriority.HIGH,
+                    attempts=0,
+                )
+        else:
+            task = TaskMessage(
+                task_id=UUID(request.task_id),
+                task_type="replayed_operation",
+                resource_id=f"replay_{request.task_id[:8]}",
+                priority=TaskPriority.HIGH,
+                attempts=0,
+            )
 
-        # Re-dispatch message to primary exchange
-        task = TaskMessage(
-            task_id=UUID(request.task_id),
-            task_type="replayed_operation",
-            resource_id=f"replay_{request.task_id[:8]}",
-            priority=TaskPriority.HIGH,
-            attempts=0,
-        )
+        # Clear previous retry failure count and reset status to pending
+        await redis.delete(f"task:attempts:{request.task_id}")
+        await redis.set(status_key, TaskStatus.PENDING.value, ex=86400)
         await broker.publish_task(task)
 
         logger.info(f"Task {request.task_id} replayed from DLQ into primary queue")

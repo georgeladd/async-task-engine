@@ -139,6 +139,49 @@ async def test_ops_dlq_replay(async_client: AsyncClient, mock_redis: AsyncMock) 
 
 
 @pytest.mark.asyncio
+async def test_ops_dlq_replay_restores_original_payload(
+    async_client: AsyncClient, mock_redis: AsyncMock
+) -> None:
+    """Verifies that DLQ replay restores the original task payload, resource_id, and callback."""
+    from src.schemas import TaskMessage, TaskPayload, TaskPriority
+
+    with (
+        patch("src.ops_api._get_redis_client", return_value=mock_redis),
+        patch("src.api.broker.publish_task", new_callable=AsyncMock) as mock_publish,
+    ):
+        task_uuid = str(uuid4())
+        original_task = TaskMessage(
+            task_id=uuid4(),
+            task_type="inventory_sync",
+            resource_id="warehouse_zone_1",
+            priority=TaskPriority.NORMAL,
+            payload=TaskPayload(items=[{"sku": "A101", "qty": 42}], parameters={"dry_run": False}),
+            callback_url="https://erp.internal/hook",
+            attempts=3,
+        )
+
+        async def redis_get_side_effect(key: str) -> str | None:
+            if key == f"task:data:{task_uuid}":
+                return original_task.model_dump_json()
+            return None
+
+        mock_redis.get = AsyncMock(side_effect=redis_get_side_effect)
+
+        payload = {"task_id": task_uuid}
+        response = await async_client.post("/api/v1/ops/dlq/replay", json=payload)
+        assert response.status_code == 200
+
+        mock_publish.assert_called_once()
+        replayed_task: TaskMessage = mock_publish.call_args[0][0]
+        assert replayed_task.task_type == "inventory_sync"
+        assert replayed_task.resource_id == "warehouse_zone_1"
+        assert replayed_task.payload.items == [{"sku": "A101", "qty": 42}]
+        assert replayed_task.priority == TaskPriority.HIGH
+        assert replayed_task.attempts == 0
+        assert str(replayed_task.callback_url) == "https://erp.internal/hook"
+
+
+@pytest.mark.asyncio
 async def test_ops_escalate_incident(async_client: AsyncClient, mock_redis: AsyncMock) -> None:
     """Tests compiling an incident report dossier for L3/Dev."""
     with patch("src.ops_api._get_redis_client", return_value=mock_redis):
