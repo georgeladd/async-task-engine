@@ -149,6 +149,12 @@ end
 - **Async Context Isolation:** Python `contextvars.ContextVar` (`current_correlation_id`, `current_resource_id`) transparently attach tracing metadata to all logs emitted within worker coroutines without manual parameter passing
 - **Ingestion-Ready:** Tailored for effortless aggregation into Grafana Loki, Elasticsearch, or AWS CloudWatch without complex regex parsing rules
 
+### 3.11. Token Bucket Rate Limiting Subsystem (`src/rate_limiter.py`)
+- **Downstream Protection:** High-volume batch operations can inadvertently exhaust third-party API rate limits or starve relational database connection pools. The engine implements an in-process asynchronous Token Bucket limiter
+- **Monotonic Replenishment:** Tokens refill continuously according to `time.monotonic()` elapsed deltas up to maximum burst capacity
+- **Smooth Throttling:** If token quota is depleted, worker coroutines compute the exact deficit sleep time (`deficit / rate`), yielding the event loop and ensuring smooth cadence without busy-waiting
+- **Dynamic Configuration:** Paced via `RATE_LIMIT_PER_SECOND` in `.env`, allowing operational throttling adjustments without code redeployments
+
 ---
 
 ## 4. Architectural Trade-Offs & Decisions
@@ -158,5 +164,6 @@ end
 | **Message Broker** | RabbitMQ (`aio-pika`) | Apache Kafka, Celery | RabbitMQ provides granular message acknowledgments, built-in DLQ routing, and message prioritization out-of-the-box without Celery's overhead |
 | **Concurrency Control** | Redis Distributed Lock | Database Row-Level Locking (`SELECT FOR UPDATE`) | Decouples locking from the relational database connection pool, eliminating database lock contention during long operations |
 | **Idempotency Deduplication** | Redis TTL Cache (`idempotency:*`) | Database Unique Constraint Tables | Redis provides sub-millisecond atomic key validation without incurring relational database IOPS overhead on duplicate bursts |
+| **Rate Throttling** | Async Token Bucket Chunker | Fixed `sleep()` delays | Token Bucket accommodates bursts up to bucket capacity while guaranteeing strict average throughput limits |
 | **Batch Streaming** | Memory-Safe Generator Iterators | Loading full arrays, Pandas DataFrames | Generators ensure predictable memory utilization regardless of payload size |
 | **Task Requeuing** | NACK with Requeue & Retry Limits | Infinite immediate retries | Prevents "poison pill" messages from crashing worker loops indefinitely |

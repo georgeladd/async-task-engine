@@ -183,6 +183,26 @@ docker stats --no-stream async-engine-worker
    docker-compose up -d worker
    ```
 
+### Incident E: External API 429 Rate Limits or Database Connection Exhaustion
+
+#### Symptoms
+- Worker logs show `HTTP 429 Too Many Requests` from third-party APIs
+- Database alerts report connection pool starvation during large batch jobs
+
+#### Root Cause
+Worker processing throughput is overwhelming downstream services faster than their rate limits permit
+
+#### Remediation & Fix
+1. Throttle worker cadence by setting `RATE_LIMIT_PER_SECOND` in `.env`:
+   ```bash
+   # In .env:
+   RATE_LIMIT_PER_SECOND=20.0
+   ```
+2. Hot-reload worker container:
+   ```bash
+   docker-compose up -d worker
+   ```
+
 ---
 
 ## 4. Useful Operational Cheatsheet

@@ -7,7 +7,7 @@
 [![RabbitMQ](https://img.shields.io/badge/RabbitMQ-3.13-FF6600.svg)](https://www.rabbitmq.com/)
 [![Redis](https://img.shields.io/badge/Redis-7.0-DC382D.svg)](https://redis.io/)
 [![CI](https://github.com/georgeladd/async-task-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/georgeladd/async-task-engine/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/pytest-40%20passed-brightgreen.svg)](https://docs.pytest.org/)
+[![Tests](https://img.shields.io/badge/pytest-45%20passed-brightgreen.svg)](https://docs.pytest.org/)
 [![Console](https://img.shields.io/badge/Console-Dashboard-009688.svg)](http://localhost:8000/dashboard)
 [![Prometheus](https://img.shields.io/badge/Prometheus-Metrics-E6522C.svg)](http://localhost:8000/metrics)
 [![Архитектура](https://img.shields.io/badge/docs-Архитектура-blue.svg)](docs/ARCHITECTURE_RU.md)
@@ -32,6 +32,7 @@
 2. **Состояния гонки (Race Conditions) и коллизии записей:** Когда несколько операторов или фоновых скриптов одновременно запускают обновление одной и той же сущности, возникают конфликты. Встроенные распределенные блокировки Redis с атомарным снятием через Lua-скрипт гарантируют строго последовательную обработку в разрезе ресурса
 3. **Зависание очередей из-за "ядовитых" сообщений (Poison Pills):** Задачи с фатальными ошибками ретраятся с экспоненциальной задержкой и автоматически изолируются в Dead-Letter Queue (DLQ), не блокируя здоровый поток очереди
 4. **Сбои сети и дублирование задач (Идемпотентность):** Встроенная поддержка HTTP-заголовка `Idempotency-Key` и токенов в теле запроса. Повторные отправки с тем же ключом возвращают исходную задачу без дублирования в брокере и повторных вызовов
+5. **Перегрузка внешних API и исчерпание пула БД (Throttling):** Встроенный асинхронный Token Bucket rate limiter дозирует скорость потоковой обработки чанков, защищая сторонние сервисы и базы данных от перегрузки
 
 ---
 
@@ -181,12 +182,13 @@ curl "http://localhost:8000/api/v1/tasks/550e8400-e29b-41d4-a716-446655440000"
 
 ## 🧪 Стратегия тестирования
 
-Проект покрыт 40 автоматическими тестами, валидирующими критические пути исполнения:
+Проект покрыт 45 автоматическими тестами, валидирующими критические пути исполнения:
 - **`tests/test_chunker.py`**: Потоковое разбиение на чанки, обработка неровных остатков и границы памяти генераторов
 - **`tests/test_redis_lock.py`**: Атомарное снятие блокировки через Lua-скрипт, обработка тайм-аутов и предотвращение гонок
 - **`tests/test_api.py`**: Валидация входных схем FastAPI, отправка в брокер очередей и обработка ошибок
 - **`tests/test_idempotency.py`**: Подавление повторных отправок, TTL-кэш в Redis, паритет заголовка и тела запроса, изоляция очереди RabbitMQ
 - **`tests/test_logging.py`**: Схема структурированного JSON-форматтера, проброс correlation_id через contextvars и сериализация исключений
+- **`tests/test_rate_limiter.py`**: Всплески емкости Token Bucket, сон при дефиците токенов, неблокирующий try_acquire и темп воркера
 - **`tests/test_cli.py`**: Проверка команд консольной утилиты саппорта, парсинг аргументов и снятие локов
 - **`tests/test_metrics.py`**: Счетчики, гистограммы задержек и формат отдачи метрик `/metrics` для Prometheus
 - **`tests/test_ops_api.py`**: Раздача веб-консоли, эндпоинты агрегации метрик, инспекция локов, Replay из DLQ и генерация отчетов инцидентов

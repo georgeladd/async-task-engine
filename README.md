@@ -7,7 +7,7 @@
 [![RabbitMQ](https://img.shields.io/badge/RabbitMQ-3.13-FF6600.svg)](https://www.rabbitmq.com/)
 [![Redis](https://img.shields.io/badge/Redis-7.0-DC382D.svg)](https://redis.io/)
 [![CI](https://github.com/georgeladd/async-task-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/georgeladd/async-task-engine/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/pytest-40%20passed-brightgreen.svg)](https://docs.pytest.org/)
+[![Tests](https://img.shields.io/badge/pytest-45%20passed-brightgreen.svg)](https://docs.pytest.org/)
 [![Console](https://img.shields.io/badge/Console-Dashboard-009688.svg)](http://localhost:8000/dashboard)
 [![Prometheus](https://img.shields.io/badge/Prometheus-Metrics-E6522C.svg)](http://localhost:8000/metrics)
 [![Architecture](https://img.shields.io/badge/docs-Architecture-blue.svg)](docs/ARCHITECTURE.md)
@@ -32,6 +32,7 @@ Production-grade asynchronous task execution engine designed for internal tools,
 2. **Race Conditions & Concurrent Write Collisions:** When multiple operators or automated triggers touch the same resource, collisions happen. Built-in Redis distributed locks with atomic Lua release ensure strict single-task execution per resource key
 3. **Poison Messages & Queue Jamming:** Failing tasks are retried with exponential backoff and automatically routed to a Dead-Letter Queue (DLQ) to prevent blocking healthy tasks
 4. **Network Glitches & Duplicate Submission (Idempotency):** Built-in support for HTTP header `Idempotency-Key` and body tokens. Subsequent requests with identical tokens atomically retrieve the original task without redundant broker dispatch or double-execution
+5. **Downstream API & Database Overload (Throttling):** Integrated Token Bucket rate limiter controls processing cadence, protecting external endpoints and database connection pools from starvation during multi-thousand item batch execution
 
 ---
 
@@ -181,12 +182,13 @@ curl "http://localhost:8000/api/v1/tasks/550e8400-e29b-41d4-a716-446655440000"
 
 ## 🧪 Testing Strategy
 
-The repository maintains 100% unit and integration coverage across 40 test cases:
+The repository maintains 100% unit and integration coverage across 45 test cases:
 - **`tests/test_chunker.py`**: Stream slicing, uneven division, and memory generator boundaries
 - **`tests/test_redis_lock.py`**: Atomic Lua script release, lock timeout handling, and race condition prevention
 - **`tests/test_api.py`**: FastAPI request validation, AMQP mock dispatch, and error handling
 - **`tests/test_idempotency.py`**: Duplicate request suppression, Redis TTL caching, header & body token parity, and queue isolation
 - **`tests/test_logging.py`**: Structured JSON formatter schema, contextvars correlation propagation, and exception serialization
+- **`tests/test_rate_limiter.py`**: Token Bucket capacity bursts, deficit sleep enforcement, non-blocking try_acquire, and worker pacing
 - **`tests/test_cli.py`**: Support CLI subcommands, health checks, argument parsing, and lock clearance
 - **`tests/test_metrics.py`**: Prometheus gauges, counters, histograms, and `/metrics` exposition format
 - **`tests/test_ops_api.py`**: Dashboard HTML serving, aggregated overview telemetry, distributed locks management, DLQ inspection, task replay, and incident escalation dossier generation
