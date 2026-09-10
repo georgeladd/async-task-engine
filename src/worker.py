@@ -45,12 +45,21 @@ logger = logging.getLogger("worker")
 class TaskWorker:
     """Worker node consuming tasks from RabbitMQ, locking resources, and executing chunked batch pipelines."""
 
-    def __init__(self, rate_limit: float | None = None) -> None:
+    def __init__(
+        self,
+        rate_limit: float | None = None,
+        queue_name: str | None = None,
+        routing_key: str | None = None,
+    ) -> None:
         """Initializes worker state, connections, rate limiter, and shutdown event flags.
 
         Args:
             rate_limit: Optional rate limit in chunks/sec. Defaults to settings.rate_limit_per_second.
+            queue_name: Optional custom queue name. Defaults to settings.worker_queue_name.
+            routing_key: Optional custom routing key. Defaults to settings.worker_routing_key.
         """
+        self.queue_name: str = queue_name or settings.worker_queue_name
+        self.routing_key: str = routing_key or settings.worker_routing_key
         self.broker = MessageBroker()
         self.redis: Redis | None = None
         self.is_running: bool = False
@@ -325,11 +334,16 @@ class TaskWorker:
         self.is_running = True
         await self.initialize()
 
-        if not self.broker.main_queue:
-            raise RuntimeError("Broker main queue is not declared")
-
-        await self.broker.main_queue.consume(self.handle_incoming_message)
-        logger.info(f"Worker listening on queue: {settings.rabbitmq_main_queue}")
+        # Dynamically declare designated queue bound to topic exchange
+        queue = await self.broker.declare_worker_queue(
+            queue_name=self.queue_name,
+            routing_key=self.routing_key,
+        )
+        await queue.consume(self.handle_incoming_message)
+        logger.info(
+            f"Worker listening on queue: '{self.queue_name}' "
+            f"[routing_key='{self.routing_key}']"
+        )
 
         await self.shutdown_event.wait()
         logger.info("Worker shutdown event triggered, stopping consumer...")

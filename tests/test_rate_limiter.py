@@ -70,7 +70,7 @@ async def test_worker_respects_rate_limiter() -> None:
     """Verifies that TaskWorker correctly paces chunk execution with rate limiter."""
     worker = TaskWorker(rate_limit=100.0)
     task = TaskMessage(
-        task_type="throttled_sync",
+        task_type="demo",
         resource_id="endpoint_alpha",
         priority=TaskPriority.NORMAL,
         payload=TaskPayload(
