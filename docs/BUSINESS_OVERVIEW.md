@@ -40,6 +40,7 @@ In growing engineering organizations, batch processing (price updates, invoice r
 | **Third-Party API Protection** | In-process Token Bucket rate limiting | **100% protection against vendor rate bans:** Smooths traffic spikes into predictable, sustained throughput matching partner SLAs |
 | **70% Lower Support Escalations** | Operations Web Console + two-way DLQ Replay | **Huge operational labor savings:** Support agents inspect stack traces in the browser, trigger one-click replays, and compile Dev bug dossiers without developer intervention |
 | **Network Perimeter Security** | Pre-flight SSRF IP validation + HMAC-SHA256 signatures | **Audit-grade security:** Outgoing webhooks cannot be hijacked to scan internal subnets or cloud metadata endpoints |
+| **Zero-Downtime Workload Isolation** | Topic Exchange with Catch-All default pool | **Fast jobs protected from heavy loads:** Resource-heavy tasks (PDF, ML) are routed to dedicated workers on the fly without downtime, preserving SLA for responsive customer actions |
 
 ---
 
