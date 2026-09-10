@@ -100,7 +100,12 @@ class MessageBroker:
             delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
             priority=priority_value,
             message_id=str(task.task_id),
-            headers={"attempts": task.attempts},
+            correlation_id=str(task.task_id),
+            headers={
+                "attempts": task.attempts,
+                "correlation_id": str(task.task_id),
+                "resource_id": task.resource_id,
+            },
         )
 
         await main_exchange.publish(amqp_message, routing_key="task.process")

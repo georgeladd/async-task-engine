@@ -15,10 +15,12 @@ from redis.asyncio import Redis
 
 from src.broker import MessageBroker
 from src.config import settings
+from src.logging_config import setup_logging
 from src.metrics import TASKS_SUBMITTED_TOTAL, get_prometheus_metrics
 from src.ops_api import router as ops_router
 from src.schemas import TaskCreateRequest, TaskMessage, TaskResponse, TaskStatus
 
+setup_logging(settings.log_level, json_mode=True)
 logger = logging.getLogger(__name__)
 
 broker = MessageBroker()

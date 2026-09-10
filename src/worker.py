@@ -14,6 +14,11 @@ from redis.asyncio import Redis
 from src.broker import MessageBroker
 from src.chunker import chunk_iterator
 from src.config import settings
+from src.logging_config import (
+    current_correlation_id,
+    current_resource_id,
+    setup_logging,
+)
 from src.metrics import (
     ACTIVE_WORKER_TASKS,
     DEAD_LETTER_TASKS_TOTAL,
@@ -24,10 +29,7 @@ from src.metrics import (
 from src.redis_lock import DistributedLock
 from src.schemas import TaskMessage, TaskResult, TaskStatus
 
-logging.basicConfig(
-    level=settings.log_level,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-)
+setup_logging(settings.log_level, json_mode=True)
 logger = logging.getLogger("worker")
 
 
@@ -113,65 +115,72 @@ class TaskWorker:
                 f"resource={task.resource_id}, items={len(task.payload.items)}]"
             )
 
-            if not self.redis:
-                logger.error("Redis client is uninitialized, requeuing task")
-                await message.nack(requeue=True)
-                return
-
-            lock = DistributedLock(
-                self.redis,
-                resource_key=task.resource_id,
-                ttl_seconds=settings.redis_lock_ttl_seconds,
-            )
-
-            # Attempt to acquire lock on target resource
-            acquired: bool = await lock.acquire(timeout_seconds=2.0)
-            if not acquired:
-                logger.warning(
-                    f"Resource '{task.resource_id}' is locked by another task. "
-                    f"Requeuing task {task.task_id} for later retry."
-                )
-                await message.nack(requeue=True)
-                return
-
-            # Resource successfully locked
-            status_key: str = f"task:status:{task.task_id}"
-            result_key: str = f"task:result:{task.task_id}"
-            ACTIVE_WORKER_TASKS.inc()
+            token_corr = current_correlation_id.set(str(task.task_id))
+            token_res = current_resource_id.set(task.resource_id)
 
             try:
-                await self.redis.set(status_key, TaskStatus.RUNNING.value, ex=86400)
-                result: TaskResult = await self.process_task_payload(task)
-
-                # Store completion result
-                await self.redis.set(status_key, TaskStatus.COMPLETED.value, ex=86400)
-                await self.redis.set(result_key, result.model_dump_json(), ex=86400)
-                await message.ack()
-                TASKS_COMPLETED_TOTAL.labels(task_type=task.task_type, status="completed").inc()
-                logger.info(
-                    f"Task {task.task_id} completed successfully in "
-                    f"{result.execution_time_seconds}s ({result.processed_count} items)"
-                )
-            except Exception as exec_err:  # noqa: BLE001
-                logger.error(f"Execution failed for task {task.task_id}: {exec_err}")
-                task.attempts += 1
-
-                if task.attempts < settings.max_task_retries:
-                    logger.info(f"Retrying task {task.task_id} (attempt {task.attempts})")
-                    await self.redis.set(status_key, TaskStatus.PENDING.value, ex=86400)
+                if not self.redis:
+                    logger.error("Redis client is uninitialized, requeuing task")
                     await message.nack(requeue=True)
-                else:
-                    logger.critical(
-                        f"Task {task.task_id} exceeded max retries ({settings.max_task_retries}). "
-                        f"Routing to Dead-Letter Queue (DLQ)"
+                    return
+
+                lock = DistributedLock(
+                    self.redis,
+                    resource_key=task.resource_id,
+                    ttl_seconds=settings.redis_lock_ttl_seconds,
+                )
+
+                # Attempt to acquire lock on target resource
+                acquired: bool = await lock.acquire(timeout_seconds=2.0)
+                if not acquired:
+                    logger.warning(
+                        f"Resource '{task.resource_id}' is locked by another task. "
+                        f"Requeuing task {task.task_id} for later retry."
                     )
-                    await self.redis.set(status_key, TaskStatus.DEAD_LETTERED.value, ex=86400)
-                    await message.reject(requeue=False)
-                    TASKS_COMPLETED_TOTAL.labels(task_type=task.task_type, status="dead_lettered").inc()
-                    DEAD_LETTER_TASKS_TOTAL.labels(task_type=task.task_type).inc()
+                    await message.nack(requeue=True)
+                    return
+
+                # Resource successfully locked
+                status_key: str = f"task:status:{task.task_id}"
+                result_key: str = f"task:result:{task.task_id}"
+                ACTIVE_WORKER_TASKS.inc()
+
+                try:
+                    await self.redis.set(status_key, TaskStatus.RUNNING.value, ex=86400)
+                    result: TaskResult = await self.process_task_payload(task)
+
+                    # Store completion result
+                    await self.redis.set(status_key, TaskStatus.COMPLETED.value, ex=86400)
+                    await self.redis.set(result_key, result.model_dump_json(), ex=86400)
+                    await message.ack()
+                    TASKS_COMPLETED_TOTAL.labels(task_type=task.task_type, status="completed").inc()
+                    logger.info(
+                        f"Task {task.task_id} completed successfully in "
+                        f"{result.execution_time_seconds}s ({result.processed_count} items)"
+                    )
+                except Exception as exec_err:  # noqa: BLE001
+                    logger.error(f"Execution failed for task {task.task_id}: {exec_err}")
+                    task.attempts += 1
+
+                    if task.attempts < settings.max_task_retries:
+                        logger.info(f"Retrying task {task.task_id} (attempt {task.attempts})")
+                        await self.redis.set(status_key, TaskStatus.PENDING.value, ex=86400)
+                        await message.nack(requeue=True)
+                    else:
+                        logger.critical(
+                            f"Task {task.task_id} exceeded max retries ({settings.max_task_retries}). "
+                            f"Routing to Dead-Letter Queue (DLQ)"
+                        )
+                        await self.redis.set(status_key, TaskStatus.DEAD_LETTERED.value, ex=86400)
+                        await message.reject(requeue=False)
+                        TASKS_COMPLETED_TOTAL.labels(task_type=task.task_type, status="dead_lettered").inc()
+                        DEAD_LETTER_TASKS_TOTAL.labels(task_type=task.task_type).inc()
+                finally:
+                    ACTIVE_WORKER_TASKS.dec()
+                    await lock.release()
             finally:
-                ACTIVE_WORKER_TASKS.dec()
-                await lock.release()
+                current_correlation_id.reset(token_corr)
+                current_resource_id.reset(token_res)
 
     async def start(self) -> None:
         """Starts worker consumption loop."""
