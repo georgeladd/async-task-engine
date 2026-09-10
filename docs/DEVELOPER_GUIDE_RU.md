@@ -229,7 +229,105 @@ for chunk in chunk_iterator(items, chunk_size):
 
 ---
 
-## 5. Контракт обработки ошибок и отказоустойчивости
+## 5. Динамическая маршрутизация очередей и специализированные воркеры
+
+В реальном продакшне характер задач различается: легкие задачи синхронизации выполняются за 20 миллисекунд, а тяжелая генерация PDF-отчетов или обработка видео может занимать минуты и требовать гигабайты оперативной памяти. Если запускать их в общем потоке, возникает эффект **«шумных соседей» (Noisy Neighbors)**: тяжелые задачи забивают очередь, а быстрые клиентские запросы зависают
+
+Для решения этой проблемы движок поддерживает **динамическую маршрутизацию на базе Topic Exchange**, сочетающую дефолтный пул и выделенные изолированные воркеры без перезапуска всей системы
+
+```
+[ Клиент / API ] ──► (Publish с routing_key="tasks.heavy.pdf_render")
+                                  │
+                      [ tasks_topic_exchange ]
+                     ╱                        ╲
+   (binding: tasks.general.*)            (binding: tasks.heavy.*)
+                ▼                                      ▼
+       [ Очередь: tasks_default ]             [ Очередь: tasks_heavy ]
+                │                                      │
+       [ Дефолтные воркеры ]                  [ Выделенные воркеры ]
+    (легкие задачи: sync, CRM)              (тяжелые задачи: 4GB RAM, ML)
+```
+
+### 5.1. Дефолтный пул по умолчанию (Catch-All)
+
+Пока у задачи нет специфических требований к ресурсам или изоляции, она направляется в общий дефолтный пул:
+* Очередь `tasks_default` привязана к обменнику с маской `tasks.general.*` (или `#`)
+* В ней работают стандартные воркеры, содержащие реестр `@task_handler` для 90-95% типовых прикладных операций
+* Это гарантирует минимальную сложность архитектуры на старте: вам не нужно создавать отдельную очередь для каждого нового типа задач
+
+### 5.2. Подключение выделенного воркера на лету (Zero-Downtime)
+
+Когда в системе появляется ресурсоемкая задача (например, рендеринг PDF или ML-инференс), мы подключаем для нее изолированный пул воркеров без перезапуска API и других компонентов
+
+#### Шаг 1. Отправка задачи с префиксом маршрутизации
+В клиентском запросе указывается тип задачи с категорией (например, `heavy.pdf_render`):
+```json
+POST /api/v1/tasks
+{
+  "task_type": "heavy.pdf_render",
+  "resource_id": "report_company_42",
+  "payload": {
+    "items": [{"document_id": "INV-2026-901"}],
+    "parameters": {"format": "pdf", "dpi": 300}
+  }
+}
+```
+API автоматически формирует routing key: `tasks.heavy.pdf_render`
+
+#### Шаг 2. Запуск выделенного воркера (Consumer-Driven Topology)
+Новый воркер запускается с указанием собственной очереди и маски маршрутизации:
+
+```python
+# src/worker_heavy.py (или запуск стандартного воркера с флагами)
+import asyncio
+from src.worker import TaskWorker
+from src.broker import RabbitMQBroker
+
+async def run_heavy_worker():
+    broker = RabbitMQBroker()
+    await broker.connect()
+
+    # Динамическое создание очереди и связывание по маске tasks.heavy.*
+    channel = await broker.get_channel()
+    queue = await channel.declare_queue("tasks_heavy", durable=True)
+    exchange = await channel.declare_exchange("tasks_exchange", type="topic", durable=True)
+    await queue.bind(exchange, routing_key="tasks.heavy.*")
+
+    worker = TaskWorker(broker=broker, queue_name="tasks_heavy")
+    await worker.start()
+
+if __name__ == "__main__":
+    asyncio.run(run_heavy_worker())
+```
+
+#### Шаг 3. Изоляция в Docker Compose
+Выделенному воркеру в `docker-compose.yml` назначаются повышенные аппаратные лимиты:
+
+```yaml
+  worker-heavy:
+    build: .
+    container_name: async-engine-worker-heavy
+    command: ["python", "-m", "src.worker_heavy"]
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 4096M
+    environment:
+      - WORKER_QUEUE_NAME=tasks_heavy
+      - ROUTING_KEY=tasks.heavy.*
+```
+
+### 5.3. Защита от потери сообщений (Alternate Exchange Fallback)
+
+Если задача со специфическим ключом отправлена, но соответствующий выделенный воркер еще не развернут, в брокере настраивается резервный обменник (`Alternate Exchange`):
+* Сообщение не отбрасывается и не удаляется
+* Брокер автоматически перекладывает его в fallback-очередь дефолтного пула
+* Дефолтный воркер сохраняет статус или ожидает запуска целевого обработчика
+
+---
+
+## 6. Контракт обработки ошибок и отказоустойчивости
 
 Движок разделяет сбои на **устранимые (Transient Errors)** и **фатальные (Unrecoverable Errors)**:
 
@@ -258,7 +356,7 @@ async def handle_billing(chunk: list[dict[str, Any]], params: dict[str, Any]) ->
 
 ---
 
-## 6. Локальная разработка и отладка
+## 7. Локальная разработка и отладка
 
 ### Запуск окружения через Docker Compose
 

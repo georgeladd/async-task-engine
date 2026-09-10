@@ -220,7 +220,105 @@ for chunk in chunk_iterator(items, chunk_size):
 
 ---
 
-## 5. Error Handling & Fault-Tolerance Contract
+## 5. Dynamic Queue Routing & Dedicated Workers
+
+In real-world production systems, workload profiles diverge dramatically: fast synchronization tasks complete in 20 milliseconds, while resource-intensive PDF rendering, video transcoding, or ML inference can take minutes and consume gigabytes of memory. Running both on a shared worker pool introduces the **"Noisy Neighbor"** anti-pattern: heavy tasks monopolize concurrency, starving responsive customer operations
+
+To resolve this, the engine supports **dynamic Topic Exchange routing**, uniting a general catch-all worker pool with on-demand dedicated workers with zero system downtime
+
+```
+[ Client / API Caller ] ──► (Publish with routing_key="tasks.heavy.pdf_render")
+                                      │
+                          [ tasks_topic_exchange ]
+                         ╱                        ╲
+       (binding: tasks.general.*)            (binding: tasks.heavy.*)
+                    ▼                                      ▼
+           [ Queue: tasks_default ]               [ Queue: tasks_heavy ]
+                    │                                      │
+           [ Default Workers ]                    [ Dedicated Workers ]
+        (fast jobs: sync, status)              (heavy jobs: 4GB RAM, ML)
+```
+
+### 5.1. Default Catch-All Pool
+
+Standard tasks without specialized memory or hardware needs require no manual queue configuration:
+* The queue `tasks_default` binds to the topic exchange using the mask `tasks.general.*` (or `#`)
+* Standard workers consume from this queue, leveraging the `@task_handler` registry for 90-95% of routine business logic
+* This guarantees minimal operational complexity at early development stages
+
+### 5.2. Deploying Dedicated Workers On-The-Fly (Zero-Downtime)
+
+When an intensive workload emerges, spin up an isolated worker pool without restarting the API or touching existing queues
+
+#### Step 1. Dispatching Tasks with Categorized Routing Keys
+Clients specify a categorized task type (e.g. `heavy.pdf_render`):
+```json
+POST /api/v1/tasks
+{
+  "task_type": "heavy.pdf_render",
+  "resource_id": "report_company_42",
+  "payload": {
+    "items": [{"document_id": "INV-2026-901"}],
+    "parameters": {"format": "pdf", "dpi": 300}
+  }
+}
+```
+The API automatically derives the routing key: `tasks.heavy.pdf_render`
+
+#### Step 2. Launching Dedicated Workers (Consumer-Driven Topology)
+The dedicated worker declares and binds its queue upon startup:
+
+```python
+# src/worker_heavy.py
+import asyncio
+from src.worker import TaskWorker
+from src.broker import RabbitMQBroker
+
+async def run_heavy_worker():
+    broker = RabbitMQBroker()
+    await broker.connect()
+
+    # Dynamically declare queue and bind to topic exchange with tasks.heavy.*
+    channel = await broker.get_channel()
+    queue = await channel.declare_queue("tasks_heavy", durable=True)
+    exchange = await channel.declare_exchange("tasks_exchange", type="topic", durable=True)
+    await queue.bind(exchange, routing_key="tasks.heavy.*")
+
+    worker = TaskWorker(broker=broker, queue_name="tasks_heavy")
+    await worker.start()
+
+if __name__ == "__main__":
+    asyncio.run(run_heavy_worker())
+```
+
+#### Step 3. Hardware Isolation via Docker Compose
+Dedicated worker containers are assigned higher compute and memory quotas:
+
+```yaml
+  worker-heavy:
+    build: .
+    container_name: async-engine-worker-heavy
+    command: ["python", "-m", "src.worker_heavy"]
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 4096M
+    environment:
+      - WORKER_QUEUE_NAME=tasks_heavy
+      - ROUTING_KEY=tasks.heavy.*
+```
+
+### 5.3. Unrouted Message Protection (Alternate Exchange Fallback)
+
+If a task with an unmapped routing key arrives before its dedicated worker is provisioned, RabbitMQ routes the message through an **Alternate Exchange**:
+* Messages are neither dropped nor rejected
+* The broker routes them to an unrouted fallback queue
+* Default workers inspect the payload, preserve state, and raise dashboard triage alerts
+
+---
+
+## 6. Error Handling & Fault-Tolerance Contract
 
 The engine differentiates between **Transient Errors** and **Unrecoverable Errors**:
 
@@ -231,7 +329,7 @@ The engine differentiates between **Transient Errors** and **Unrecoverable Error
 
 ---
 
-## 6. Local Development & Testing
+## 7. Local Development & Testing
 
 ### Starting Services
 
