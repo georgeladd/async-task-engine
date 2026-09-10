@@ -170,3 +170,60 @@ async def test_idempotency_returns_actual_completed_status(
         assert data["is_duplicate"] is True
         assert data["status"] == "completed"
         mock_publish.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_idempotency_race_condition(
+    async_client: AsyncClient,
+    mock_redis: AsyncMock,
+) -> None:
+    """Verifies that concurrent requests with identical Idempotency-Key safely resolve via SET NX."""
+    import asyncio
+
+    idempotency_key = f"idem-race-{uuid4()}"
+    payload = {
+        "task_type": "concurrent_export",
+        "resource_id": "warehouse_parallel",
+        "payload": {"items": [{"id": 1}]},
+    }
+    headers = {"Idempotency-Key": idempotency_key}
+
+    redis_store: dict[str, str] = {}
+    lock = asyncio.Lock()
+
+    async def mock_get(key: str) -> str | None:
+        async with lock:
+            return redis_store.get(key)
+
+    async def mock_set(key: str, value: str, **kwargs) -> bool:
+        async with lock:
+            if kwargs.get("nx") and key in redis_store:
+                return False
+            redis_store[key] = value
+            return True
+
+    mock_redis.get = AsyncMock(side_effect=mock_get)
+    mock_redis.set = AsyncMock(side_effect=mock_set)
+
+    with (
+        patch("src.api.broker.publish_task", new_callable=AsyncMock) as mock_publish,
+        patch("src.api.redis_client", mock_redis),
+    ):
+        tasks = [
+            async_client.post("/api/v1/tasks", json=payload, headers=headers)
+            for _ in range(10)
+        ]
+        responses = await asyncio.gather(*tasks)
+
+        assert all(r.status_code == 202 for r in responses)
+        results = [r.json() for r in responses]
+
+        non_duplicates = [res for res in results if not res["is_duplicate"]]
+        duplicates = [res for res in results if res["is_duplicate"]]
+
+        assert len(non_duplicates) == 1
+        assert len(duplicates) == 9
+        mock_publish.assert_called_once()
+
+        primary_task_id = non_duplicates[0]["task_id"]
+        assert all(dup["task_id"] == primary_task_id for dup in duplicates)

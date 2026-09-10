@@ -36,6 +36,7 @@ services:
       - RABBITMQ_PASSWORD=guest
       - REDIS_HOST=redis
       - REDIS_PORT=6379
+      - OPS_API_KEY=${OPS_API_KEY:-ops-dev-secret}
     ports:
       - "8000:8000"
     volumes:
@@ -60,6 +61,7 @@ services:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - BATCH_CHUNK_SIZE=50
+      - WEBHOOK_SIGNING_SECRET=${WEBHOOK_SIGNING_SECRET:-webhook-dev-secret}
     depends_on:
       rabbitmq:
         condition: service_healthy
