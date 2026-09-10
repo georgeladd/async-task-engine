@@ -81,6 +81,19 @@ def mock_redis() -> AsyncMock:
     async def mock_expire(key: str, seconds: int) -> bool:
         return key in storage
 
+    async def mock_scan_iter(match: str | None = None, count: int | None = None) -> AsyncGenerator[str, None]:
+        import fnmatch
+
+        pattern = match or "*"
+        for k in list(storage.keys()):
+            if fnmatch.fnmatch(k, pattern):
+                yield k
+
+    async def mock_keys(pattern: str = "*") -> list[str]:
+        import fnmatch
+
+        return [k for k in storage if fnmatch.fnmatch(k, pattern)]
+
     client.set = AsyncMock(side_effect=mock_set)
     client.get = AsyncMock(side_effect=mock_get)
     client.eval = AsyncMock(side_effect=mock_eval)
@@ -90,6 +103,8 @@ def mock_redis() -> AsyncMock:
     client.decr = AsyncMock(side_effect=mock_decr)
     client.delete = AsyncMock(side_effect=mock_delete)
     client.expire = AsyncMock(side_effect=mock_expire)
+    client.scan_iter = mock_scan_iter
+    client.keys = AsyncMock(side_effect=mock_keys)
     client.close = AsyncMock()
     return client
 

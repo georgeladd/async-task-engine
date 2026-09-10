@@ -95,7 +95,10 @@ async def test_ops_overview_reads_distributed_redis_metrics(
 async def test_ops_locks_listing(async_client: AsyncClient, mock_redis: AsyncMock) -> None:
     """Tests listing active distributed resource locks."""
     with patch("src.ops_api._get_redis_client", return_value=mock_redis):
-        mock_redis.keys = AsyncMock(return_value=["lock:resource:account_99"])
+        async def mock_scan_locks(match: str | None = None, count: int | None = None):
+            yield "lock:resource:account_99"
+
+        mock_redis.scan_iter = mock_scan_locks
         mock_redis.ttl = AsyncMock(return_value=180)
         mock_redis.get = AsyncMock(return_value="owner-token-12345")
 
@@ -128,7 +131,11 @@ async def test_ops_dlq_listing(async_client: AsyncClient, mock_redis: AsyncMock)
     """Tests querying Dead-Letter Queue items."""
     with patch("src.ops_api._get_redis_client", return_value=mock_redis):
         task_uuid = str(uuid4())
-        mock_redis.keys = AsyncMock(return_value=[f"task:status:{task_uuid}"])
+
+        async def mock_scan_dlq(match: str | None = None, count: int | None = None):
+            yield f"task:status:{task_uuid}"
+
+        mock_redis.scan_iter = mock_scan_dlq
 
         async def custom_get(key: str) -> str | None:
             if key == f"task:status:{task_uuid}":
@@ -154,11 +161,13 @@ async def test_ops_dlq_replay(async_client: AsyncClient, mock_redis: AsyncMock) 
     ):
         task_uuid = str(uuid4())
         payload = {"task_id": task_uuid}
+        mock_redis.get = AsyncMock(return_value="5")
         response = await async_client.post("/api/v1/ops/dlq/replay", json=payload)
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "requeued"
         mock_publish.assert_called_once()
+        mock_redis.decr.assert_called_with("metrics:tasks_dead_letter")
 
 
 @pytest.mark.asyncio

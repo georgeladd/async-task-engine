@@ -144,7 +144,6 @@ async def get_ops_overview() -> OpsOverview:
     """
     redis = _get_redis_client()
     active_locks_count: int = 0
-    dead_letter_count: int = 0
 
     r_submitted: int = 0
     r_completed: int = 0
@@ -153,19 +152,12 @@ async def get_ops_overview() -> OpsOverview:
     r_active: int = 0
     r_dur_sum: float = 0.0
     r_dur_cnt: int = 0
-
     try:
-        lock_keys = await redis.keys("lock:resource:*")
-        active_locks_count = len(lock_keys)
+        # Count active distributed locks using non-blocking SCAN iteration
+        async for _ in redis.scan_iter(match="lock:resource:*", count=100):
+            active_locks_count += 1
 
-        # Collect tasks marked as dead_lettered
-        status_keys = await redis.keys("task:status:*")
-        for sk in status_keys:
-            val = await redis.get(sk)
-            if val == TaskStatus.DEAD_LETTERED.value:
-                dead_letter_count += 1
-
-        # Read distributed cluster-wide metrics from Redis
+        # Read distributed cluster-wide metrics from Redis directly (O(1) lookups)
         r_submitted = int(await redis.get("metrics:tasks_submitted") or 0)
         r_completed = int(await redis.get("metrics:tasks_completed") or 0)
         r_dlq = int(await redis.get("metrics:tasks_dead_letter") or 0)
@@ -198,7 +190,7 @@ async def get_ops_overview() -> OpsOverview:
     # Prioritize distributed cluster-wide Redis counters; fallback to in-memory Prometheus
     submitted: int = r_submitted if r_submitted > 0 else prom_submitted
     completed: int = r_completed if r_completed > 0 else prom_completed
-    dlq_metric: int = max(r_dlq, dead_letter_count) if r_dlq > 0 else max(prom_dlq, dead_letter_count)
+    dlq_metric: int = r_dlq if r_dlq > 0 else prom_dlq
     items_metric: int = r_items if r_items > 0 else prom_items
     active_workers: int = r_active if r_active > 0 else prom_active
 
@@ -209,16 +201,16 @@ async def get_ops_overview() -> OpsOverview:
     else:
         avg_duration = 0.0
 
-    sys_status: str = "degraded" if dead_letter_count > 0 or dlq_metric > 0 else "healthy"
+    sys_status: str = "degraded" if dlq_metric > 0 else "healthy"
 
     overview = OpsOverview(
         system_status=sys_status,
         queue_primary_depth=max(0, submitted - completed - dlq_metric),
-        queue_dlq_depth=max(dead_letter_count, dlq_metric),
+        queue_dlq_depth=dlq_metric,
         active_workers=active_workers,
         tasks_submitted_total=submitted,
         tasks_completed_total=completed,
-        tasks_dead_letter_total=max(dead_letter_count, dlq_metric),
+        tasks_dead_letter_total=dlq_metric,
         items_processed_total=items_metric,
         avg_duration_seconds=avg_duration,
         active_locks_count=active_locks_count,
@@ -237,8 +229,7 @@ async def list_active_locks() -> list[LockItem]:
     locks: list[LockItem] = []
 
     try:
-        keys = await redis.keys("lock:resource:*")
-        for key in keys:
+        async for key in redis.scan_iter(match="lock:resource:*", count=100):
             ttl = await redis.ttl(key)
             token = await redis.get(key)
             resource_name = key.replace("lock:resource:", "")
@@ -250,6 +241,8 @@ async def list_active_locks() -> list[LockItem]:
                     owner_token=str(token or "unknown"),
                 )
             )
+            if len(locks) >= 200:
+                break
     except Exception as err:
         logger.error(f"Failed to query distributed locks: {err}")
         raise HTTPException(
@@ -309,8 +302,7 @@ async def list_dead_letter_tasks() -> list[DLQItem]:
     dlq_items: list[DLQItem] = []
 
     try:
-        status_keys = await redis.keys("task:status:*")
-        for sk in status_keys:
+        async for sk in redis.scan_iter(match="task:status:*", count=100):
             state = await redis.get(sk)
             if state == TaskStatus.DEAD_LETTERED.value:
                 task_id = sk.replace("task:status:", "")
@@ -347,6 +339,8 @@ async def list_dead_letter_tasks() -> list[DLQItem]:
                         updated_at=datetime.now(timezone.utc).isoformat(),
                     )
                 )
+                if len(dlq_items) >= 200:
+                    break
     except (RedisError, OSError) as err:
         logger.error(f"Failed to list dead-letter tasks: {err}")
     finally:
@@ -396,9 +390,12 @@ async def replay_dead_letter_task(request: DLQReplayRequest) -> dict[str, Any]:
                 attempts=0,
             )
 
-        # Clear previous retry failure count and reset status to pending
+        # Clear previous retry failure count, reset status to pending, and decrement DLQ counter
         await redis.delete(f"task:attempts:{request.task_id}")
         await redis.set(status_key, TaskStatus.PENDING.value, ex=86400)
+        current_dlq_cnt = int(await redis.get("metrics:tasks_dead_letter") or 0)
+        if current_dlq_cnt > 0:
+            await redis.decr("metrics:tasks_dead_letter")
         await broker.publish_task(task)
 
         logger.info(f"Task {request.task_id} replayed from DLQ into primary queue")
