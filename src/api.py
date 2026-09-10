@@ -8,7 +8,7 @@ from typing import Any
 from uuid import UUID
 
 import redis.asyncio as aioredis
-from fastapi import FastAPI, HTTPException, Response, status
+from fastapi import FastAPI, Header, HTTPException, Response, status
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from redis.asyncio import Redis
@@ -106,13 +106,18 @@ async def metrics_endpoint() -> Response:
     status_code=status.HTTP_202_ACCEPTED,
     tags=["Tasks"],
 )
-async def submit_task(request: TaskCreateRequest) -> TaskResponse:
+async def submit_task(
+    request: TaskCreateRequest,
+    idempotency_key_header: str | None = Header(default=None, alias="Idempotency-Key"),
+) -> TaskResponse:
     """Submits a new operational task for asynchronous background processing.
 
-    Validates incoming payload, wraps in TaskMessage with isolated UUID, and routes to RabbitMQ.
+    Validates incoming payload, checks idempotency deduplication cache,
+    wraps in TaskMessage with isolated UUID, and routes to RabbitMQ.
 
     Args:
         request: Task creation parameters and payload items.
+        idempotency_key_header: Optional Idempotency-Key HTTP header.
 
     Returns:
         TaskResponse with generated task_id and queued status.
@@ -120,6 +125,24 @@ async def submit_task(request: TaskCreateRequest) -> TaskResponse:
     Raises:
         HTTPException: If queuing fails.
     """
+    idempotency_token: str | None = idempotency_key_header or request.idempotency_key
+
+    # Check for duplicate submission if idempotency token is supplied
+    if idempotency_token and redis_client:
+        idempotency_cache_key = f"idempotency:{idempotency_token}"
+        cached_task_id = await redis_client.get(idempotency_cache_key)
+        if cached_task_id:
+            logger.info(
+                f"Idempotent replay detected for key '{idempotency_token}'. "
+                f"Suppressing duplicate queue dispatch, returning task {cached_task_id}"
+            )
+            return TaskResponse(
+                task_id=UUID(cached_task_id),
+                status=TaskStatus.PENDING,
+                is_duplicate=True,
+                message="Task already enqueued (idempotent replay)",
+            )
+
     task = TaskMessage(
         task_type=request.task_type,
         resource_id=request.resource_id,
@@ -136,14 +159,22 @@ async def submit_task(request: TaskCreateRequest) -> TaskResponse:
             priority=task.priority.value,
         ).inc()
 
-        # Store initial task status in Redis
+        # Store initial task status and idempotency mapping in Redis
         if redis_client:
             task_status_key: str = f"task:status:{task.task_id}"
             await redis_client.set(task_status_key, TaskStatus.PENDING.value, ex=86400)
 
+            if idempotency_token:
+                await redis_client.set(
+                    f"idempotency:{idempotency_token}",
+                    str(task.task_id),
+                    ex=86400,
+                )
+
         response = TaskResponse(
             task_id=task.task_id,
             status=TaskStatus.PENDING,
+            is_duplicate=False,
             message="Task enqueued successfully for background processing",
         )
     except Exception as err:

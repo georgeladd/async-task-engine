@@ -64,6 +64,11 @@ class TaskCreateRequest(BaseModel):
     )
     priority: TaskPriority = Field(default=TaskPriority.NORMAL, description="Queue priority")
     payload: TaskPayload = Field(default_factory=TaskPayload, description="Task data")
+    idempotency_key: str | None = Field(
+        default=None,
+        max_length=128,
+        description="Optional unique idempotency token to prevent duplicate task execution",
+    )
 
 
 class TaskMessage(BaseModel):
@@ -103,6 +108,7 @@ class TaskResponse(BaseModel):
 
     task_id: UUID = Field(..., description="Task UUID")
     status: TaskStatus = Field(default=TaskStatus.PENDING, description="Current status")
+    is_duplicate: bool = Field(default=False, description="True if response is a cached replay")
     enqueued_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     message: str = Field(..., description="User-facing summary message")
 
