@@ -1,5 +1,14 @@
 // Operations and Support Console Frontend Logic
 
+const OPS_TOKEN = "ops-dev-secret";
+
+function getOpsHeaders(extra = {}) {
+  return {
+    "X-Ops-Token": OPS_TOKEN,
+    ...extra,
+  };
+}
+
 let throughputChart = null;
 let durationChart = null;
 let refreshIntervalId = null;
@@ -145,6 +154,7 @@ function resetRefreshTimer(intervalMs) {
     refreshIntervalId = setInterval(() => {
       fetchOverview();
       fetchLocks();
+      fetchDLQ();
     }, intervalMs);
   }
 }
@@ -152,7 +162,7 @@ function resetRefreshTimer(intervalMs) {
 // 1. Fetch System Health & Overview
 async function fetchOverview() {
   try {
-    const res = await fetch("/api/v1/ops/overview");
+    const res = await fetch("/api/v1/ops/overview", { headers: getOpsHeaders() });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
 
@@ -210,7 +220,7 @@ async function fetchOverview() {
 // 2. Fetch Active Distributed Locks
 async function fetchLocks() {
   try {
-    const res = await fetch("/api/v1/ops/locks");
+    const res = await fetch("/api/v1/ops/locks", { headers: getOpsHeaders() });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const locks = await res.json();
 
@@ -249,7 +259,7 @@ async function forceUnlockResource(resourceId) {
   try {
     const res = await fetch("/api/v1/ops/unlock", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: getOpsHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ resource_id: resourceId }),
     });
     const data = await res.json();
@@ -264,7 +274,7 @@ async function forceUnlockResource(resourceId) {
 // 3. Fetch Dead-Letter Queue Items
 async function fetchDLQ() {
   try {
-    const res = await fetch("/api/v1/ops/dlq");
+    const res = await fetch("/api/v1/ops/dlq", { headers: getOpsHeaders() });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const dlq = await res.json();
 
@@ -273,23 +283,24 @@ async function fetchDLQ() {
     badge.innerText = `${dlq.length} tasks`;
 
     if (dlq.length === 0) {
-      tbody.innerHTML = `<tr><td colspan="5" class="text-center empty-state">Dead-Letter Queue is empty. All queues healthy</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="6" class="text-center empty-state">No dead-letter tasks. All pipelines operational!</td></tr>`;
       return;
     }
 
     tbody.innerHTML = dlq.map(item => `
       <tr>
-        <td><code class="badge-code">${escapeHtml(item.task_id.substring(0, 8))}...</code></td>
-        <td>${escapeHtml(item.task_type)}</td>
-        <td class="text-red font-mono text-xs">${escapeHtml(item.error_reason)}</td>
-        <td>${new Date(item.updated_at).toLocaleTimeString()}</td>
+        <td><code class="badge-code">${item.task_id.substring(0, 8)}...</code></td>
+        <td><span class="badge-type">${escapeHtml(item.task_type)}</span></td>
+        <td><strong>${escapeHtml(item.resource_id)}</strong></td>
+        <td><span class="badge-status status-failed">${item.status}</span></td>
+        <td><div class="dlq-reason" title="${escapeHtml(item.error_reason)}">${escapeHtml(item.error_reason)}</div></td>
         <td>
-          <div style="display: flex; gap: 6px;">
-            <button class="btn btn-sm btn-warning" onclick="replayDLQTask('${escapeHtml(item.task_id)}')">
+          <div style="display:flex; gap:0.25rem;">
+            <button class="btn btn-sm btn-outline" onclick="replayDLQTask('${item.task_id}')" title="Replay into primary queue">
               ⟲ Replay
             </button>
-            <button class="btn btn-sm btn-outline" onclick="openEscalateModal('${escapeHtml(item.task_id)}')">
-              🚨 Escalate
+            <button class="btn btn-sm btn-outline" onclick="openEscalateModal('${item.task_id}')" title="Escalate to L3/Dev">
+              ⚠️ Escalate
             </button>
           </div>
         </td>
@@ -305,7 +316,7 @@ async function replayDLQTask(taskId) {
   try {
     const res = await fetch("/api/v1/ops/dlq/replay", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: getOpsHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ task_id: taskId }),
     });
     const data = await res.json();
@@ -404,7 +415,7 @@ async function generateDossier() {
   try {
     const res = await fetch("/api/v1/ops/escalate", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: getOpsHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({
         task_id: taskId,
         operator_comment: notes,

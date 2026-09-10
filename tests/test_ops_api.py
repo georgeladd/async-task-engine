@@ -4,9 +4,32 @@ from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import pytest
-from httpx import AsyncClient
+from httpx import ASGITransport, AsyncClient
 
+from src.api import app
 from src.schemas import TaskStatus
+
+
+@pytest.mark.asyncio
+async def test_ops_endpoints_require_valid_token() -> None:
+    """Verifies that operations endpoints reject requests without valid X-Ops-Token."""
+    transport = ASGITransport(app=app)
+
+    # 1. No token provided
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        res = await client.get("/api/v1/ops/overview")
+        assert res.status_code == 401
+        assert "Invalid or missing operational API key" in res.json()["detail"]
+
+    # 2. Invalid token provided
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers={"X-Ops-Token": "wrong-secret"},
+    ) as client:
+        res = await client.get("/api/v1/ops/overview")
+        assert res.status_code == 401
+        assert "Invalid or missing operational API key" in res.json()["detail"]
 
 
 @pytest.mark.asyncio

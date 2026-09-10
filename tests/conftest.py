@@ -98,5 +98,6 @@ def mock_redis() -> AsyncMock:
 async def async_client() -> AsyncGenerator[AsyncClient, None]:
     """Fixture providing an async HTTP client for API endpoints."""
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
+    headers = {"X-Ops-Token": "ops-dev-secret"}
+    async with AsyncClient(transport=transport, base_url="http://test", headers=headers) as client:
         yield client

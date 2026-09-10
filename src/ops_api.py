@@ -7,7 +7,8 @@ from typing import Any
 from uuid import UUID, uuid4
 
 import redis.asyncio as aioredis
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Security, status
+from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
@@ -25,7 +26,36 @@ from src.schemas import TaskMessage, TaskPriority, TaskStatus
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/v1/ops", tags=["Operations"])
+ops_api_key_header = APIKeyHeader(name="X-Ops-Token", auto_error=False)
+
+
+async def verify_ops_token(
+    token: str | None = Security(ops_api_key_header),
+) -> str:
+    """Validates operational API key for access control to sensitive endpoints.
+
+    Args:
+        token: Provided API token from X-Ops-Token header.
+
+    Returns:
+        Validated token string.
+
+    Raises:
+        HTTPException: If token is missing or invalid.
+    """
+    if not token or token != settings.ops_api_key:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or missing operational API key",
+        )
+    return token
+
+
+router = APIRouter(
+    prefix="/api/v1/ops",
+    tags=["Operations"],
+    dependencies=[Depends(verify_ops_token)],
+)
 
 
 class OpsOverview(BaseModel):
