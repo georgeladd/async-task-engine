@@ -7,6 +7,7 @@ import signal
 import time
 from typing import Any
 
+import httpx
 import redis.asyncio as aioredis
 from aio_pika.abc import AbstractIncomingMessage
 from redis.asyncio import Redis
@@ -28,7 +29,12 @@ from src.metrics import (
 )
 from src.rate_limiter import AsyncTokenBucketRateLimiter
 from src.redis_lock import DistributedLock
-from src.schemas import TaskMessage, TaskResult, TaskStatus
+from src.schemas import (
+    TaskMessage,
+    TaskResult,
+    TaskStatus,
+    WebhookDeliveryPayload,
+)
 
 setup_logging(settings.log_level, json_mode=True)
 logger = logging.getLogger("worker")
@@ -102,6 +108,53 @@ class TaskWorker:
         )
         return result
 
+    async def dispatch_webhook(
+        self,
+        callback_url: str,
+        event: str,
+        task: TaskMessage,
+        status: TaskStatus,
+        result: TaskResult | None = None,
+    ) -> None:
+        """Dispatches an asynchronous webhook notification upon task resolution.
+
+        Args:
+            callback_url: Webhook destination URL.
+            event: Event type, e.g. 'task.completed' or 'task.dead_lettered'.
+            task: TaskMessage context.
+            status: Final status of the task.
+            result: Optional TaskResult output.
+        """
+        payload = WebhookDeliveryPayload(
+            event=event,
+            task_id=task.task_id,
+            task_type=task.task_type,
+            resource_id=task.resource_id,
+            status=status,
+            result=result,
+        )
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.post(
+                    callback_url,
+                    json=payload.model_dump(mode="json"),
+                    headers={
+                        "User-Agent": "Async-Task-Engine-Webhook/1.0",
+                        "X-Task-ID": str(task.task_id),
+                        "X-Event-Type": event,
+                    },
+                )
+                if response.is_success:
+                    logger.info(f"Webhook delivered for task {task.task_id} to {callback_url}")
+                else:
+                    logger.warning(
+                        f"Webhook delivery for task {task.task_id} responded with HTTP {response.status_code}"
+                    )
+        except (httpx.HTTPError, OSError) as err:
+            logger.warning(
+                f"Failed to dispatch webhook for task {task.task_id} to {callback_url}: {err}"
+            )
+
     async def handle_incoming_message(self, message: AbstractIncomingMessage) -> None:
         """Handler for incoming AMQP messages.
 
@@ -167,6 +220,16 @@ class TaskWorker:
                         f"Task {task.task_id} completed successfully in "
                         f"{result.execution_time_seconds}s ({result.processed_count} items)"
                     )
+
+                    # Trigger webhook callback if configured
+                    if task.callback_url:
+                        await self.dispatch_webhook(
+                            callback_url=str(task.callback_url),
+                            event="task.completed",
+                            task=task,
+                            status=TaskStatus.COMPLETED,
+                            result=result,
+                        )
                 except Exception as exec_err:  # noqa: BLE001
                     logger.error(f"Execution failed for task {task.task_id}: {exec_err}")
                     task.attempts += 1
@@ -184,6 +247,16 @@ class TaskWorker:
                         await message.reject(requeue=False)
                         TASKS_COMPLETED_TOTAL.labels(task_type=task.task_type, status="dead_lettered").inc()
                         DEAD_LETTER_TASKS_TOTAL.labels(task_type=task.task_type).inc()
+
+                        # Trigger webhook callback for dead-lettered failure
+                        if task.callback_url:
+                            await self.dispatch_webhook(
+                                callback_url=str(task.callback_url),
+                                event="task.dead_lettered",
+                                task=task,
+                                status=TaskStatus.DEAD_LETTERED,
+                                result=None,
+                            )
                 finally:
                     ACTIVE_WORKER_TASKS.dec()
                     await lock.release()

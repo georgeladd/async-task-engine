@@ -5,7 +5,7 @@ from enum import Enum
 from typing import Any
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, HttpUrl
 
 
 class TaskPriority(str, Enum):
@@ -69,6 +69,10 @@ class TaskCreateRequest(BaseModel):
         max_length=128,
         description="Optional unique idempotency token to prevent duplicate task execution",
     )
+    callback_url: HttpUrl | None = Field(
+        default=None,
+        description="Optional webhook HTTP/HTTPS callback destination",
+    )
 
 
 class TaskMessage(BaseModel):
@@ -81,6 +85,7 @@ class TaskMessage(BaseModel):
         priority: Assigned priority level.
         payload: Payload records and arguments.
         attempts: Number of times this task was attempted.
+        callback_url: Webhook destination URL if notifications requested.
         created_at: ISO timestamp of task generation.
     """
 
@@ -90,6 +95,10 @@ class TaskMessage(BaseModel):
     priority: TaskPriority = Field(default=TaskPriority.NORMAL, description="Queue priority")
     payload: TaskPayload = Field(default_factory=TaskPayload, description="Task data")
     attempts: int = Field(default=0, ge=0, description="Execution attempt counter")
+    callback_url: HttpUrl | None = Field(
+        default=None,
+        description="Optional webhook HTTP/HTTPS callback destination",
+    )
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
         description="Creation timestamp",
@@ -131,3 +140,18 @@ class TaskResult(BaseModel):
     chunk_count: int = Field(default=0, ge=0, description="Chunks count")
     execution_time_seconds: float = Field(default=0.0, ge=0.0, description="Duration in seconds")
     error_message: str | None = Field(default=None, description="Failure details if any")
+
+
+class WebhookDeliveryPayload(BaseModel):
+    """Schema for asynchronous webhook HTTP notifications dispatched upon task resolution."""
+
+    event: str = Field(..., description="Event identifier, e.g. task.completed or task.dead_lettered")
+    task_id: UUID = Field(..., description="Task UUID")
+    task_type: str = Field(..., description="Task category")
+    resource_id: str = Field(..., description="Target resource key")
+    status: TaskStatus = Field(..., description="Final execution status")
+    result: TaskResult | None = Field(default=None, description="Task execution metrics")
+    delivered_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        description="Webhook transmission timestamp",
+    )

@@ -150,6 +150,7 @@ async def submit_task(
         resource_id=request.resource_id,
         priority=request.priority,
         payload=request.payload,
+        callback_url=request.callback_url,
     )
 
     try:
